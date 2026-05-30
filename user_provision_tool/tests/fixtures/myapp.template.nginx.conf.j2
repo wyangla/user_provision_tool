@@ -1,0 +1,25 @@
+# nginx conf template for "myapp" service
+# Template variables:
+#   {{ hostname }}          -> e.g. myapp-alice-0.example.com
+#   {{ container_prefix }}  -> e.g. myapp-user_alice-0-
+#   {{ htpasswd_path }}     -> absolute path to the generated .htpasswd file
+#   {{ user_name }}
+#   {{ service_name }}
+#   {{ label }}
+#   {{ domain_name }}
+
+server {
+    listen 80;
+    server_name {{ hostname }};
+
+    auth_basic "{{ service_name }} - {{ user_name }}";
+    auth_basic_user_file {{ htpasswd_path }};
+
+    location / {
+        proxy_pass         http://{{ container_prefix }}web:80;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+    }
+}

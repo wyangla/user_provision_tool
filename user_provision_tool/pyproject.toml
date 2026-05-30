@@ -1,0 +1,24 @@
+[project]
+name = "user-provision-tool"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "bcrypt<4.1",
+    "fastapi>=0.115",
+    "jinja2>=3.1.6",
+    "passlib[bcrypt]>=1.7.4",
+    "pyyaml>=6.0.3",
+    "uvicorn[standard]>=0.32",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-mock>=3.15.1",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that create real Docker containers (requires sudo docker access)",
+]

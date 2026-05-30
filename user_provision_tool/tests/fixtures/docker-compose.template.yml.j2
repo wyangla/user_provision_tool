@@ -1,0 +1,36 @@
+# docker-compose template for "myapp" service
+# Template variables:
+#   {{ container_prefix }}  -> e.g. myapp-user_alice-0-
+#   {{ user_name }}
+#   {{ service_name }}
+#   {{ label }}
+#   {{ volumes }}           -> dict: template_key -> host_path
+
+services:
+  web:
+    image: nginx:alpine
+    container_name: {{ container_prefix }}web
+    ports:
+      - "0:80"
+    volumes:
+      - {{ volumes['app_data'] }}:/usr/share/nginx/html:ro
+    environment:
+      - SERVICE_NAME={{ service_name }}
+      - USER_NAME={{ user_name }}
+      - LABEL={{ label }}
+    depends_on:
+      - db
+
+  db:
+    image: postgres:16-alpine
+    container_name: {{ container_prefix }}db
+    environment:
+      - POSTGRES_DB={{ service_name }}_{{ user_name }}
+      - POSTGRES_USER={{ user_name }}
+      - POSTGRES_PASSWORD=changeme
+    volumes:
+      - {{ volumes['db_data'] }}:/var/lib/postgresql/data
+      - db_socket:/var/run/postgresql
+
+volumes:
+  db_socket:

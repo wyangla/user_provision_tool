@@ -1,0 +1,13 @@
+services:
+  provision-api:
+    build: ./user_provision_tool
+    ports:
+      - "${PROVISION_API_PORT:-8765}:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Same-path bind-mount so generated compose files reference valid host paths
+      - ${PROVISION_DIR}:${PROVISION_DIR}
+    environment:
+      - GENERATED_DIR=${PROVISION_DIR}/generated
+      - REGISTRY_FILE=${PROVISION_DIR}/generated/user_registry.yml
+    restart: unless-stopped
