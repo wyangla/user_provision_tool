@@ -22,8 +22,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 API_PORT="${PROVISION_API_PORT:-8765}"
+NGINX_PORT="${NGINX_HTTP_PORT:-8766}"
 API_URL="http://localhost:${API_PORT}"
 COMPOSE_FILE="$REPO_DIR/docker-compose.provision.yml"
+export NGINX_HTTP_PORT="$NGINX_PORT"
 
 # Test user / service — used to build the container name filter
 TEST_USER="testuser"
