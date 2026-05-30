@@ -37,6 +37,8 @@ GENERATED_DIR = Path(
 )
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
+NGINX_CONTAINER = os.environ.get("NGINX_CONTAINER", "provision-nginx")
+
 # The registry module reads REGISTRY_FILE from its own env var at import time.
 # We additionally sync it here so both the API and the lib use the same path.
 import lib.registry as _reg_mod
@@ -151,6 +153,7 @@ def register_user(req: RegisterRequest) -> dict[str, Any]:
             "passwd": passwd_hash,
             "service_name": req.service_name,
             "label": req.label,
+            "network_name": template_engine.user_network_name(req.service_name, req.user_name, req.label),
             "compose_template_path": req.compose_template_path,
             "nginx_conf_template_path": req.nginx_conf_template_path,
             "env_file_path": req.env_file_path,
@@ -188,6 +191,11 @@ def register_user(req: RegisterRequest) -> dict[str, Any]:
             registry.remove_user_service(req.user_name, req.service_name, req.label)
         raise HTTPException(500, f"docker compose up failed: {e}")
 
+    # Connect nginx to the user's isolated network so it can proxy to user containers
+    net = template_engine.user_network_name(req.service_name, req.user_name, req.label)
+    docker_ops.network_connect(NGINX_CONTAINER, net)
+    docker_ops.nginx_reload(NGINX_CONTAINER)
+
     return {
         "status": "registered",
         "entry": entry,
@@ -209,11 +217,19 @@ def remove_user(user_name: str, service_name: str, label: str) -> dict[str, str]
         raise HTTPException(404, f"No registration found for {user_name}/{service_name}/{label}.")
 
     compose_file = entry.get("compose_file_path", "")
+    net = entry.get("network_name", "")
+
+    # Disconnect nginx before compose_down so Docker can remove the network
+    if net:
+        docker_ops.network_disconnect(NGINX_CONTAINER, net)
+
     if compose_file and Path(compose_file).exists():
         try:
             docker_ops.compose_down(compose_file, env_file=entry.get("env_file_path") or None)
         except RuntimeError as e:
             raise HTTPException(500, f"docker compose down failed: {e}")
+
+    docker_ops.nginx_reload(NGINX_CONTAINER)
 
     with _registry_lock:
         registry.remove_user_service(user_name, service_name, label)

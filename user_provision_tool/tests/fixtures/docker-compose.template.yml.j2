@@ -20,6 +20,8 @@ services:
       - LABEL={{ label }}
     depends_on:
       - db
+    networks:
+      - {{ network_name }}
 
   db:
     image: postgres:16-alpine
@@ -31,6 +33,12 @@ services:
     volumes:
       - {{ volumes['db_data'] }}:/var/lib/postgresql/data
       - db_socket:/var/run/postgresql
+    networks:
+      - {{ network_name }}
 
 volumes:
   db_socket:
+
+networks:
+  {{ network_name }}:
+    name: {{ network_name }}

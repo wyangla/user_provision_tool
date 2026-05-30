@@ -44,6 +44,21 @@ def compose_build(compose_file: str, no_cache: bool = False, env_file: str | Non
     _run(cmd)
 
 
+def network_connect(container: str, network: str) -> None:
+    """Connect *container* to *network*. Silently no-ops if already connected."""
+    _run(["docker", "network", "connect", network, container], check=False)
+
+
+def network_disconnect(container: str, network: str) -> None:
+    """Disconnect *container* from *network*. Silently no-ops if not connected."""
+    _run(["docker", "network", "disconnect", network, container], check=False)
+
+
+def nginx_reload(container: str) -> None:
+    """Send a reload signal to nginx inside *container*."""
+    _run(["docker", "exec", container, "nginx", "-s", "reload"], check=False)
+
+
 def docker_ps() -> list[dict[str, str]]:
     """Return list of running containers as dicts with keys: name, status, image."""
     result = subprocess.run(

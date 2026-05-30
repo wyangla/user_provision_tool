@@ -37,6 +37,11 @@ def container_prefix(service_name: str, user_name: str, label: str) -> str:
     return f"{service_name}-user_{user_name}-{label}-"
 
 
+def user_network_name(service_name: str, user_name: str, label: str) -> str:
+    """Return the isolated Docker network name for a user service instance."""
+    return f"{service_name}-user_{user_name}-{label}"
+
+
 class _PathPlaceholderUndefined(Undefined):
     """Renders as a valid absolute path placeholder so YAML stays parseable."""
     def __str__(self) -> str:
@@ -109,6 +114,7 @@ def render_compose(
         "service_name": service_name,
         "label": label,
         "container_prefix": prefix,
+        "network_name": user_network_name(service_name, user_name, label),
         "volumes": volumes,
     }
     rendered = env.get_template(tpl_name).render(**ctx)
@@ -141,6 +147,7 @@ def render_nginx_conf(
         "label": label,
         "domain_name": domain_name,
         "container_prefix": prefix,
+        "network_name": user_network_name(service_name, user_name, label),
         "hostname": f"{service_name}-{user_name}-{label}.{domain_name}",
         "htpasswd_path": htpasswd_path,
     }

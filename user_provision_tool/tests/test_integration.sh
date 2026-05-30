@@ -20,16 +20,17 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 API_PORT="${PROVISION_API_PORT:-8765}"
 API_URL="http://localhost:${API_PORT}"
-COMPOSE_FILE="$PROJECT_DIR/docker-compose.provision.yml"
+COMPOSE_FILE="$REPO_DIR/docker-compose.provision.yml"
 
 # Test user / service — used to build the container name filter
 TEST_USER="testuser"
 TEST_SVC="myapp"
 TEST_LABEL="0"
-# Matches the provision-api container and the user-provisioned containers
-CONTAINER_FILTER="provision-api|${TEST_SVC}-user_${TEST_USER}-${TEST_LABEL}"
+# Matches the provision stack containers and the user-provisioned containers
+CONTAINER_FILTER="provision-api|provision-nginx|${TEST_SVC}-user_${TEST_USER}-${TEST_LABEL}"
 
 # Colours
 RED='\033[0;31m'
@@ -127,7 +128,7 @@ teardown() {
     echo ""
     echo "--- Teardown ---"
     print_all_containers "before cleanup"
-    (cd "$PROJECT_DIR" && docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null) || true
+    (cd "$REPO_DIR" && docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null) || true
     rm -rf "$PROVISION_DIR"
     echo "Cleaned up."
 }
@@ -138,7 +139,7 @@ trap teardown EXIT
 # ---------------------------------------------------------------------------
 echo ""
 echo "--- Building and starting provision-api ---"
-cd "$PROJECT_DIR"
+cd "$REPO_DIR"
 docker compose -f "$COMPOSE_FILE" up -d --build
 
 # Wait for API to be ready (up to 60 s) using /health (no docker call needed)
