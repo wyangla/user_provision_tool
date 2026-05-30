@@ -50,6 +50,7 @@ def sample_entry(tmp_path: Path) -> dict:
         "passwd": "",
         "service_name": "myapp",
         "label": "0",
+        "network_name": "myapp-user_alice-0",
         "compose_template_path": str(COMPOSE_TEMPLATE),
         "nginx_conf_template_path": str(NGINX_TEMPLATE),
         "compose_file_path": compose_out,

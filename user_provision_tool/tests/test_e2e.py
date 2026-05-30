@@ -115,6 +115,8 @@ class TestE2ERegistration:
         assert registered_alice["service_name"] == "myapp"
         assert registered_alice["label"] == "0"
         assert registered_alice["volumes"]["app_data"] == "/srv/alice/app"
+        # network_name must be stored in the registry entry
+        assert registered_alice["network_name"] == "myapp-user_alice-0"
 
     def test_compose_file_generated(self, tmp_path, registered_alice):
         compose_path = Path(registered_alice["compose_file_path"])
@@ -123,6 +125,11 @@ class TestE2ERegistration:
         assert "web" in data["services"]
         assert "db" in data["services"]
         assert data["services"]["web"]["container_name"] == "myapp-user_alice-0-web"
+        # Isolated network must be declared at top level and referenced by services
+        expected_net = "myapp-user_alice-0"
+        assert expected_net in data.get("networks", {})
+        assert expected_net in data["services"]["web"].get("networks", [])
+        assert expected_net in data["services"]["db"].get("networks", [])
 
     def test_nginx_conf_generated(self, registered_alice):
         nginx_path = Path(registered_alice["nginx_conf_path"])
@@ -221,6 +228,26 @@ class TestE2ERegistration:
         with patch.object(sys, "argv", sys_argv):
             reg_script.main()
         assert reg_mod.get_user_service("dave", "myapp", "0") is not None
+
+    def test_two_users_have_isolated_networks(self, tmp_path, mock_docker, monkeypatch):
+        """Different users must get different network names in the registry."""
+        import cli.register as reg_script
+        for user, label in [("alice", "0"), ("bob", "1")]:
+            monkeypatch.setattr("getpass.getpass", lambda prompt="": "")
+            monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+            sys_argv = [
+                "cli/register.py",
+                "-u", user, "-sn", "myapp",
+                "-tc", COMPOSE_TEMPLATE,
+                "-l", label,
+                "-v", f"app_data=/data/{user}/app",
+                "-v", f"db_data=/data/{user}/db",
+            ]
+            with patch.object(sys, "argv", sys_argv):
+                reg_script.main()
+        e_alice = reg_mod.get_user_service("alice", "myapp", "0")
+        e_bob = reg_mod.get_user_service("bob", "myapp", "1")
+        assert e_alice["network_name"] != e_bob["network_name"]
 
 
 # ---------------------------------------------------------------------------

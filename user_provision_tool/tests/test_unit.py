@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 import yaml
 
-from lib import auth, registry, template_engine, validation
+from lib import auth, docker_ops, registry, template_engine, validation
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 COMPOSE_TEMPLATE = str(FIXTURES_DIR / "docker-compose.template.yml.j2")
@@ -237,3 +238,136 @@ class TestTemplateEngine:
         c_bob = yaml.safe_load(Path(out_bob).read_text())
         assert c_alice["services"]["web"]["container_name"] == "myapp-user_alice-0-web"
         assert c_bob["services"]["web"]["container_name"] == "myapp-user_bob-0-web"
+
+    # --- network_name helper ---
+
+    def test_user_network_name_format(self):
+        assert template_engine.user_network_name("myapp", "alice", "0") == "myapp-user_alice-0"
+
+    def test_user_network_name_different_users_differ(self):
+        n1 = template_engine.user_network_name("myapp", "alice", "0")
+        n2 = template_engine.user_network_name("myapp", "bob", "0")
+        assert n1 != n2
+
+    def test_user_network_name_different_labels_differ(self):
+        n1 = template_engine.user_network_name("myapp", "alice", "0")
+        n2 = template_engine.user_network_name("myapp", "alice", "1")
+        assert n1 != n2
+
+    # --- network_name in rendered compose ---
+
+    def test_render_compose_declares_named_network(self, tmp_path):
+        out = str(tmp_path / "dc.yml")
+        template_engine.render_compose(
+            COMPOSE_TEMPLATE, out,
+            user_name="alice", service_name="myapp", label="0",
+            volumes={"app_data": "/srv/alice/app", "db_data": "/srv/alice/db"},
+        )
+        data = yaml.safe_load(Path(out).read_text())
+        expected_net = "myapp-user_alice-0"
+        assert "networks" in data, "Top-level 'networks' key missing from rendered compose"
+        assert expected_net in data["networks"], f"Network '{expected_net}' not declared"
+        assert data["networks"][expected_net]["name"] == expected_net
+
+    def test_render_compose_services_joined_to_network(self, tmp_path):
+        out = str(tmp_path / "dc.yml")
+        template_engine.render_compose(
+            COMPOSE_TEMPLATE, out,
+            user_name="alice", service_name="myapp", label="0",
+            volumes={"app_data": "/srv/alice/app", "db_data": "/srv/alice/db"},
+        )
+        data = yaml.safe_load(Path(out).read_text())
+        expected_net = "myapp-user_alice-0"
+        for svc_name, svc in data["services"].items():
+            assert "networks" in svc, f"Service '{svc_name}' missing 'networks' key"
+            assert expected_net in svc["networks"], (
+                f"Service '{svc_name}' not joined to network '{expected_net}'"
+            )
+
+    def test_render_compose_two_users_have_different_networks(self, tmp_path):
+        out_alice = str(tmp_path / "alice.yml")
+        out_bob = str(tmp_path / "bob.yml")
+        template_engine.render_compose(
+            COMPOSE_TEMPLATE, out_alice,
+            "alice", "myapp", "0", {"app_data": "/a/app", "db_data": "/a/db"},
+        )
+        template_engine.render_compose(
+            COMPOSE_TEMPLATE, out_bob,
+            "bob", "myapp", "0", {"app_data": "/b/app", "db_data": "/b/db"},
+        )
+        d_alice = yaml.safe_load(Path(out_alice).read_text())
+        d_bob = yaml.safe_load(Path(out_bob).read_text())
+        nets_alice = set(d_alice["networks"].keys())
+        nets_bob = set(d_bob["networks"].keys())
+        assert nets_alice.isdisjoint(nets_bob), "Two different users must not share a network"
+
+
+# ---------------------------------------------------------------------------
+# docker_ops
+# ---------------------------------------------------------------------------
+
+
+class TestDockerOps:
+    """Unit tests for docker_ops helper functions (subprocess patched)."""
+
+    def _mock_run(self, monkeypatch):
+        """Patch subprocess.run inside docker_ops and return a call-list."""
+        calls: list[list[str]] = []
+
+        def fake_run(args, **kwargs):
+            calls.append(list(args))
+            m = MagicMock()
+            m.returncode = 0
+            return m
+
+        monkeypatch.setattr(docker_ops.subprocess, "run", fake_run)
+        return calls
+
+    def test_network_connect_command(self, monkeypatch):
+        calls = self._mock_run(monkeypatch)
+        docker_ops.network_connect("provision-nginx", "myapp-user_alice-0")
+        assert calls[-1] == [
+            "docker", "network", "connect", "myapp-user_alice-0", "provision-nginx"
+        ]
+
+    def test_network_disconnect_command(self, monkeypatch):
+        calls = self._mock_run(monkeypatch)
+        docker_ops.network_disconnect("provision-nginx", "myapp-user_alice-0")
+        assert calls[-1] == [
+            "docker", "network", "disconnect", "myapp-user_alice-0", "provision-nginx"
+        ]
+
+    def test_nginx_reload_command(self, monkeypatch):
+        calls = self._mock_run(monkeypatch)
+        docker_ops.nginx_reload("provision-nginx")
+        assert calls[-1] == [
+            "docker", "exec", "provision-nginx", "nginx", "-s", "reload"
+        ]
+
+    def test_network_connect_uses_check_false(self, monkeypatch):
+        """network_connect must not raise even when docker returns non-zero."""
+        def fail_run(args, **kwargs):
+            m = MagicMock()
+            m.returncode = 1
+            return m
+        monkeypatch.setattr(docker_ops.subprocess, "run", fail_run)
+        # Should not raise
+        docker_ops.network_connect("provision-nginx", "nonexistent-net")
+
+    def test_network_disconnect_uses_check_false(self, monkeypatch):
+        """network_disconnect must not raise even when docker returns non-zero."""
+        def fail_run(args, **kwargs):
+            m = MagicMock()
+            m.returncode = 1
+            return m
+        monkeypatch.setattr(docker_ops.subprocess, "run", fail_run)
+        docker_ops.network_disconnect("provision-nginx", "nonexistent-net")
+
+    def test_nginx_reload_uses_check_false(self, monkeypatch):
+        """nginx_reload must not raise even when the container is absent."""
+        def fail_run(args, **kwargs):
+            m = MagicMock()
+            m.returncode = 1
+            return m
+        monkeypatch.setattr(docker_ops.subprocess, "run", fail_run)
+        docker_ops.nginx_reload("provision-nginx")

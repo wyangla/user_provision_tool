@@ -145,6 +145,7 @@ def main() -> None:
         "passwd": passwd_hash,
         "service_name": args.service_name,
         "label": args.label,
+        "network_name": template_engine.user_network_name(args.service_name, args.user_name, args.label),
         "compose_template_path": compose_template,
         "nginx_conf_template_path": nginx_template,
         "env_file_path": env_file,

@@ -29,6 +29,7 @@ COMPOSE_FILE="$REPO_DIR/docker-compose.provision.yml"
 TEST_USER="testuser"
 TEST_SVC="myapp"
 TEST_LABEL="0"
+TEST_NETWORK_NAME="${TEST_SVC}-user_${TEST_USER}-${TEST_LABEL}"
 # Matches the provision stack containers and the user-provisioned containers
 CONTAINER_FILTER="provision-api|provision-nginx|${TEST_SVC}-user_${TEST_USER}-${TEST_LABEL}"
 
@@ -56,6 +57,26 @@ print_containers() {
     if [ -n "$rows" ]; then
         printf "    %s\n" "$header"
         echo "$rows" | awk '{printf "    %s\n", $0}'
+    else
+        echo "    (none)"
+    fi
+}
+
+# Print Docker networks matching TEST_NETWORK_NAME and show connected endpoints
+print_networks() {
+    local label="${1:-}"
+    echo "  [user networks${label:+ — $label}]"
+    local rows
+    rows=$(docker network ls --format "{{.Name}}" 2>/dev/null \
+        | grep -F "$TEST_NETWORK_NAME") || true
+    if [ -n "$rows" ]; then
+        while IFS= read -r net; do
+            printf "    network: %s\n" "$net"
+            docker network inspect "$net" \
+                --format '    endpoints: {{range $k,$v := .Containers}}{{$v.Name}} {{end}}' \
+                2>/dev/null || true
+            echo
+        done <<< "$rows"
     else
         echo "    (none)"
     fi
@@ -237,6 +258,7 @@ for i in $(seq 1 20); do
     sleep 2
 done
 print_containers "after registration"
+print_networks "after registration"
 
 if [ "$web_ok" -ge 1 ]; then
     pass "Container $EXPECTED_WEB is running"
@@ -294,6 +316,7 @@ for i in $(seq 1 15); do
     sleep 2
 done
 print_containers "after rebuild"
+print_networks "after rebuild"
 
 if [ "$web_ok" -ge 1 ] && [ "$db_ok" -ge 1 ]; then
     pass "Containers still running after rebuild"
@@ -321,6 +344,7 @@ echo ""
 echo "--- Test 9: Containers gone after removal ---"
 sleep 3
 print_all_containers "after removal"
+print_networks "after removal"
 running=$(docker ps --format '{{.Names}}')
 web_gone=$(echo "$running" | grep -c "$EXPECTED_WEB" || true)
 db_gone=$(echo "$running"  | grep -c "$EXPECTED_DB"  || true)
@@ -346,6 +370,48 @@ if [ "$count" -eq 0 ]; then
     pass "GET /users returns empty after removal"
 else
     fail "GET /users should be empty after removal, got: $resp"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 11: provision-nginx is connected to the user network after registration
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 11: provision-nginx connected to user network ---"
+# Re-register to get a fresh network for the connectivity check
+reg_resp2=$(curl -sf -X POST "$API_URL/users" \
+    -H "Content-Type: application/json" \
+    -d "$REGISTER_BODY")
+reg_status2=$(echo "$reg_resp2" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
+if [ "$reg_status2" = "registered" ]; then
+    # Give Docker a moment to connect the network
+    sleep 2
+    nginx_connected=$(docker network inspect "$TEST_NETWORK_NAME" \
+        --format '{{range $k,$v := .Containers}}{{$v.Name}} {{end}}' 2>/dev/null \
+        | grep -c 'provision-nginx' || true)
+    print_networks "after re-registration"
+    if [ "$nginx_connected" -ge 1 ]; then
+        pass "provision-nginx is connected to network $TEST_NETWORK_NAME"
+    else
+        fail "provision-nginx is NOT connected to network $TEST_NETWORK_NAME"
+    fi
+else
+    fail "Re-registration failed: $reg_resp2"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 12: User network is removed after de-registration
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 12: User network removed after de-registration ---"
+del_resp2=$(curl -sf -X DELETE "$API_URL/users/testuser/services/myapp/0")
+sleep 3
+net_exists=$(docker network ls --format '{{.Name}}' 2>/dev/null \
+    | grep -c "^${TEST_NETWORK_NAME}$" || true)
+print_networks "after second removal"
+if [ "$net_exists" -eq 0 ]; then
+    pass "Network $TEST_NETWORK_NAME is removed after de-registration"
+else
+    fail "Network $TEST_NETWORK_NAME still exists after de-registration"
 fi
 
 # ---------------------------------------------------------------------------
