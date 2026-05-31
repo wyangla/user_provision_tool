@@ -24,25 +24,25 @@ def _run(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
     return result
 
 
-def compose_up(compose_file: str, env_file: str | None = None) -> None:
+def _compose_base(compose_file: str, env_file: str | None, project_name: str | None) -> list[str]:
     cmd = ["docker", "compose", "-f", compose_file]
+    if project_name:
+        cmd += ["--project-name", project_name]
     if env_file:
         cmd += ["--env-file", env_file]
-    _run(cmd + ["up", "-d"])
+    return cmd
 
 
-def compose_down(compose_file: str, env_file: str | None = None) -> None:
-    cmd = ["docker", "compose", "-f", compose_file]
-    if env_file:
-        cmd += ["--env-file", env_file]
-    _run(cmd + ["down"])
+def compose_up(compose_file: str, env_file: str | None = None, project_name: str | None = None) -> None:
+    _run(_compose_base(compose_file, env_file, project_name) + ["up", "-d"])
 
 
-def compose_build(compose_file: str, no_cache: bool = False, env_file: str | None = None) -> None:
-    cmd = ["docker", "compose", "-f", compose_file]
-    if env_file:
-        cmd += ["--env-file", env_file]
-    cmd += ["build"]
+def compose_down(compose_file: str, env_file: str | None = None, project_name: str | None = None) -> None:
+    _run(_compose_base(compose_file, env_file, project_name) + ["down"])
+
+
+def compose_build(compose_file: str, no_cache: bool = False, env_file: str | None = None, project_name: str | None = None) -> None:
+    cmd = _compose_base(compose_file, env_file, project_name) + ["build"]
     if no_cache:
         cmd.append("--no-cache")
     _run(cmd)

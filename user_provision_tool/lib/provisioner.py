@@ -180,7 +180,7 @@ def register_user(
 
     # --- Start containers ---
     try:
-        docker_ops.compose_up(compose_out, env_file=copied_env)
+        docker_ops.compose_up(compose_out, env_file=copied_env, project_name=entry["network_name"])
     except RuntimeError:
         # Rollback: remove registry entry so the caller can retry
         with _registry_lock:
@@ -236,7 +236,7 @@ def remove_user(
         docker_ops.network_disconnect(nginx_container, net)
 
     if compose_file and Path(compose_file).exists():
-        docker_ops.compose_down(compose_file, env_file=entry.get("env_file_path") or None)
+        docker_ops.compose_down(compose_file, env_file=entry.get("env_file_path") or None, project_name=entry.get("network_name"))
 
     docker_ops.nginx_reload(nginx_container)
 
@@ -280,7 +280,8 @@ def rebuild_user(
         raise FileNotFoundError(f"Compose file not found: {compose_file}")
 
     env_file = entry.get("env_file_path") or None
-    docker_ops.compose_build(compose_file, no_cache=no_cache, env_file=env_file)
-    docker_ops.compose_up(compose_file, env_file=env_file)
+    project_name = entry.get("network_name")
+    docker_ops.compose_build(compose_file, no_cache=no_cache, env_file=env_file, project_name=project_name)
+    docker_ops.compose_up(compose_file, env_file=env_file, project_name=project_name)
 
     return {"user_name": user_name, "service_name": service_name, "label": label}
