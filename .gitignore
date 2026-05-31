@@ -16,6 +16,10 @@ wheels/
 user_provision_tool/generated/*
 !user_provision_tool/generated/.gitkeep
 
+# source_project/ — service project trees managed by operators
+user_provision_tool/source_project/*
+!user_provision_tool/source_project/.gitkeep
+
 # Runtime state
 user_provision_tool/user_registry.yml
 
@@ -26,3 +30,4 @@ user_provision_tool/user_registry.yml
 # Local reference material and GitHub config (not tracked)
 _ref/
 .github/
+example/

@@ -24,8 +24,8 @@ Per-user container names are deterministic: `{service}-user_{user}-{label}-{svc}
 **1. Set up the provision directory**
 ```bash
 export PROVISION_DIR=/srv/provision
-mkdir -p $PROVISION_DIR/templates $PROVISION_DIR/generated
-# copy your .j2 templates there
+mkdir -p $PROVISION_DIR/generated $PROVISION_DIR/source_projects
+# copy your service source directories + .j2 templates there
 ```
 
 **2. Start the service**
@@ -40,7 +40,7 @@ curl -X POST http://localhost:8765/users \
   -d '{
     "user_name": "alice",
     "service_name": "myapp",
-    "compose_template_path": "/srv/provision/templates/myapp.yml.j2",
+    "compose_template_path": "/srv/provision/source_projects/myapp/docker-compose.myapp.yml.j2",
     "volumes": {
       "app_data": "/srv/provision/user-data/alice/app",
       "db_data":  "/srv/provision/user-data/alice/db"
@@ -64,12 +64,16 @@ curl -X DELETE http://localhost:8765/users/alice/services/myapp/0
 ## Quick Start (CLI)
 
 ```bash
-# Register
+# Register (provide project root + template file)
 python cli/register.py \
   -u alice -sn myapp \
-  -tc /srv/provision/templates/myapp.yml.j2 \
+  -pr /srv/provision/source_projects/myapp \
+  -tc docker-compose.myapp.yml.j2 \
   -v app_data=/srv/provision/user-data/alice/app \
   -v db_data=/srv/provision/user-data/alice/db
+
+# Or let the tool generate the template from a plain compose file:
+# python cli/register.py ... -fc docker-compose.yml ...
 
 # Status
 python cli/status.py -u alice
@@ -86,24 +90,27 @@ python cli/remove.py -u alice -sn myapp -l 0
 ## Architecture
 
 ```
-  ┌─────────────────────────────────────┐
-  │             lib/                    │
-  │  validation      registry           │
-  │  template_engine auth               │
-  │  docker_ops                         │
-  └────────────┬────────────────────────┘
-               │  shared by both entry points
+  ┌─────────────────────────────────────────────────┐
+  │             lib/                                │
+  │  provisioner                                    │
+  │  validation      registry                       │
+  │  template_engine auth                           │
+  │  docker_ops      compose_converter              │
+  │                  nginx_converter                │
+  └────────────┬────────────────────────────────────┘
+               │  api.py and cli/ both delegate to provisioner
        ┌───────┴────────┐
        │                │
-  ┌────┴─────┐   ┌──────┴──────────────────────────┐
-  │  api.py  │   │  cli/                           │
-  │  FastAPI │   │  register · remove · rebuild    │
-  │  :8765   │   │  status                         │
-  └──────────┘   └─────────────────────────────────┘
+  ┌────┴─────┐   ┌──────┴─────────────────────────────────────────┐
+  │  api.py  │   │  cli/                                          │
+  │  FastAPI │   │  register · remove · rebuild · status          │
+  │  :8765   │   │  gen_compose_template · gen_nginx_template     │
+  └──────────┘   └────────────────────────────────────────────────┘
 ```
 
-The API and CLI share the same `lib/` modules. The API is the preferred runtime entry point;
-the CLI is useful for scripting or running without the container.
+Both the API and CLI delegate shared workflow logic to `lib/provisioner.py`.
+Rendered compose files land next to their template in the source project directory;
+nginx conf and htpasswd files land in `GENERATED_DIR`.
 
 ---
 
@@ -117,6 +124,7 @@ the CLI is useful for scripting or running without the container.
 | [templates.md](docs/templates.md) | Writing compose and nginx templates |
 | [deployment.md](docs/deployment.md) | Running in production, environment variables |
 | [testing.md](docs/testing.md) | Running unit, e2e, and integration tests |
+| [template_rendering_workflow.md](docs/template_rendering_workflow.md) | Step-by-step rendering pipeline |
 
 ---
 
@@ -126,7 +134,7 @@ the CLI is useful for scripting or running without the container.
 # Install dependencies (requires uv)
 uv sync
 
-# Run unit + e2e tests (62 tests, no Docker needed)
+# Run unit + e2e tests (112 tests, no Docker needed)
 python -m pytest tests/test_unit.py tests/test_e2e.py -v
 
 # Run full integration tests (requires Docker)

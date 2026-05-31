@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import os
 import sys
-import threading
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +25,9 @@ from pydantic import BaseModel, field_validator
 # Make lib/ importable when the file sits at the project root
 sys.path.insert(0, str(Path(__file__).parent))
 
-from lib import auth, docker_ops, registry, template_engine, validation
+from lib import docker_ops, provisioner, registry, template_engine, validation
+from lib.compose_converter import compose_file_to_template
+from lib.nginx_converter import nginx_file_to_template
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -48,9 +49,6 @@ _reg_path = os.environ.get(
 )
 _reg_mod.REGISTRY_FILE = Path(_reg_path)
 
-# Registry writes are not atomic; a lock prevents concurrent corruption.
-_registry_lock = threading.Lock()
-
 # ---------------------------------------------------------------------------
 # Request / response models
 # ---------------------------------------------------------------------------
@@ -58,8 +56,14 @@ _registry_lock = threading.Lock()
 class RegisterRequest(BaseModel):
     user_name: str
     service_name: str
-    compose_template_path: str
+    # Exactly one of these must be provided:
+    #   compose_template_path — path to an existing Jinja2 .yml.j2 template
+    #   compose_file_path     — path to a plain docker-compose.yml (auto-converted)
+    compose_template_path: str | None = None
+    compose_file_path: str | None = None
+    # Optionally one of:
     nginx_conf_template_path: str | None = None
+    nginx_conf_file_path: str | None = None
     env_file_path: str | None = None
     label: str = "0"
     domain: str = "localhost"
@@ -83,6 +87,20 @@ class RegisterRequest(BaseModel):
         except validation.ValidationError as e:
             raise ValueError(str(e))
         return v
+
+    from pydantic import model_validator
+
+    @model_validator(mode="after")
+    def _check_compose_source(self) -> "RegisterRequest":
+        has_tpl = bool(self.compose_template_path)
+        has_file = bool(self.compose_file_path)
+        if not has_tpl and not has_file:
+            raise ValueError("one of compose_template_path or compose_file_path is required")
+        if has_tpl and has_file:
+            raise ValueError("compose_template_path and compose_file_path are mutually exclusive")
+        if self.nginx_conf_template_path and self.nginx_conf_file_path:
+            raise ValueError("nginx_conf_template_path and nginx_conf_file_path are mutually exclusive")
+        return self
 
 
 class RebuildRequest(BaseModel):
@@ -111,98 +129,64 @@ def health() -> dict[str, str]:
 
 @app.post("/users", status_code=201)
 def register_user(req: RegisterRequest) -> dict[str, Any]:
-    # Template files must be reachable inside the container
-    if not Path(req.compose_template_path).exists():
-        raise HTTPException(404, f"compose_template_path not found: {req.compose_template_path}")
-    if req.nginx_conf_template_path and not Path(req.nginx_conf_template_path).exists():
-        raise HTTPException(404, f"nginx_conf_template_path not found: {req.nginx_conf_template_path}")
+    # --- Resolve compose template (convert plain file if needed) ---
+    if req.compose_file_path:
+        src = Path(req.compose_file_path)
+        if not src.exists():
+            raise HTTPException(404, f"compose_file_path not found: {req.compose_file_path}")
+        template_out = str(src.parent / f"{src.stem}.yml.j2")
+        try:
+            compose_file_to_template(str(src), template_out, service_name_hint=req.service_name)
+        except Exception as e:
+            raise HTTPException(422, f"could not convert compose file: {e}")
+        compose_template = template_out
+    else:
+        if not Path(req.compose_template_path).exists():
+            raise HTTPException(404, f"compose_template_path not found: {req.compose_template_path}")
+        compose_template = req.compose_template_path
 
-    with _registry_lock:
-        if registry.get_user_service(req.user_name, req.service_name, req.label):
-            raise HTTPException(
-                409,
-                f"User '{req.user_name}' with service '{req.service_name}' "
-                f"and label '{req.label}' is already registered.",
-            )
+    # --- Resolve nginx template (convert plain file if needed) ---
+    nginx_template: str | None = None
+    if req.nginx_conf_file_path:
+        src = Path(req.nginx_conf_file_path)
+        if not src.exists():
+            raise HTTPException(404, f"nginx_conf_file_path not found: {req.nginx_conf_file_path}")
+        template_out = str(src.parent / f"{src.name}.j2")
+        try:
+            nginx_file_to_template(str(src), template_out, req.service_name)
+        except Exception as e:
+            raise HTTPException(422, f"could not convert nginx conf file: {e}")
+        nginx_template = template_out
+    elif req.nginx_conf_template_path:
+        if not Path(req.nginx_conf_template_path).exists():
+            raise HTTPException(404, f"nginx_conf_template_path not found: {req.nginx_conf_template_path}")
+        nginx_template = req.nginx_conf_template_path
 
-        # Volume cross-check (warn in response, never block)
-        expected_vols = template_engine.extract_template_volumes(req.compose_template_path)
-        missing_vols = [k for k in expected_vols if k not in req.volumes]
-        extra_vols = [k for k in req.volumes if k not in expected_vols]
-
-        # Hash password
-        passwd_hash = auth.hash_password(req.user_name, req.passwd) if req.passwd else ""
-
-        # Output paths
-        compose_out = str(
-            GENERATED_DIR / f"docker-compose.user-{req.user_name}.{req.label}.yml"
-        )
-        nginx_out: str | None = None
-        htpasswd_out: str | None = None
-        if req.nginx_conf_template_path:
-            nginx_out = str(
-                GENERATED_DIR / f"{req.service_name}.user-{req.user_name}.{req.label}.nginx.conf"
-            )
-            htpasswd_out = str(
-                GENERATED_DIR / f"{req.service_name}.user-{req.user_name}.{req.label}.htpasswd"
-            )
-
-        # Registry entry
-        entry: dict[str, Any] = {
-            "user_name": req.user_name,
-            "passwd": passwd_hash,
-            "service_name": req.service_name,
-            "label": req.label,
-            "network_name": template_engine.user_network_name(req.service_name, req.user_name, req.label),
-            "compose_template_path": req.compose_template_path,
-            "nginx_conf_template_path": req.nginx_conf_template_path,
-            "env_file_path": req.env_file_path,
-            "compose_file_path": compose_out,
-            "nginx_conf_path": nginx_out,
-            "htpasswd_path": htpasswd_out,
-            "volumes": req.volumes,
-        }
-        registry.add_user(entry)
-
-    # Render compose file — also copies env_file to generated/ if provided
-    copied_env = template_engine.render_compose(
-        req.compose_template_path, compose_out,
-        req.user_name, req.service_name, req.label, req.volumes,
-        env_file=req.env_file_path,
-    )
-
-    # Render nginx conf
-    if req.nginx_conf_template_path and nginx_out and htpasswd_out:
-        if passwd_hash:
-            auth.write_htpasswd_file(htpasswd_out, req.user_name, passwd_hash)
-        htpasswd_render = htpasswd_out if passwd_hash else ""
-        template_engine.render_nginx_conf(
-            req.nginx_conf_template_path, nginx_out,
-            req.user_name, req.service_name, req.label,
-            req.domain, htpasswd_render,
-        )
-
-    # Start containers
+    # --- Delegate to shared provisioner ---
     try:
-        docker_ops.compose_up(compose_out, env_file=copied_env)
+        result = provisioner.register_user(
+            user_name=req.user_name,
+            service_name=req.service_name,
+            label=req.label,
+            compose_template=compose_template,
+            output_dir=Path(compose_template).parent,
+            nginx_output_dir=GENERATED_DIR,
+            volumes=req.volumes,
+            passwd=req.passwd,
+            nginx_template=nginx_template,
+            domain=req.domain,
+            env_file=req.env_file_path,
+            nginx_container=NGINX_CONTAINER,
+        )
+    except ValueError as e:
+        raise HTTPException(409, str(e))
     except RuntimeError as e:
-        # Rollback registry on docker failure
-        with _registry_lock:
-            registry.remove_user_service(req.user_name, req.service_name, req.label)
         raise HTTPException(500, f"docker compose up failed: {e}")
-
-    # Connect nginx to the user's isolated network so it can proxy to user containers
-    net = template_engine.user_network_name(req.service_name, req.user_name, req.label)
-    docker_ops.network_connect(NGINX_CONTAINER, net)
-    docker_ops.nginx_reload(NGINX_CONTAINER)
 
     return {
         "status": "registered",
-        "entry": entry,
-        "volume_warnings": {
-            "missing": missing_vols,
-            "extra": extra_vols,
-        },
+        "entry": result["entry"],
+        "volume_warnings": result["volume_warnings"],
     }
 
 
@@ -212,27 +196,17 @@ def register_user(req: RegisterRequest) -> dict[str, Any]:
 
 @app.delete("/users/{user_name}/services/{service_name}/{label}")
 def remove_user(user_name: str, service_name: str, label: str) -> dict[str, str]:
-    entry = registry.get_user_service(user_name, service_name, label)
-    if not entry:
-        raise HTTPException(404, f"No registration found for {user_name}/{service_name}/{label}.")
-
-    compose_file = entry.get("compose_file_path", "")
-    net = entry.get("network_name", "")
-
-    # Disconnect nginx before compose_down so Docker can remove the network
-    if net:
-        docker_ops.network_disconnect(NGINX_CONTAINER, net)
-
-    if compose_file and Path(compose_file).exists():
-        try:
-            docker_ops.compose_down(compose_file, env_file=entry.get("env_file_path") or None)
-        except RuntimeError as e:
-            raise HTTPException(500, f"docker compose down failed: {e}")
-
-    docker_ops.nginx_reload(NGINX_CONTAINER)
-
-    with _registry_lock:
-        registry.remove_user_service(user_name, service_name, label)
+    try:
+        provisioner.remove_user(
+            user_name=user_name,
+            service_name=service_name,
+            label=label,
+            nginx_container=NGINX_CONTAINER,
+        )
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except RuntimeError as e:
+        raise HTTPException(500, f"docker compose down failed: {e}")
 
     return {"status": "removed", "user_name": user_name, "service_name": service_name, "label": label}
 
@@ -246,18 +220,17 @@ def rebuild_user(
     user_name: str, service_name: str, label: str,
     req: RebuildRequest = RebuildRequest(),
 ) -> dict[str, str]:
-    entry = registry.get_user_service(user_name, service_name, label)
-    if not entry:
-        raise HTTPException(404, f"No registration found for {user_name}/{service_name}/{label}.")
-
-    compose_file = entry.get("compose_file_path", "")
-    if not compose_file or not Path(compose_file).exists():
-        raise HTTPException(404, f"Compose file not found: {compose_file}")
-
-    env_file = entry.get("env_file_path") or None
     try:
-        docker_ops.compose_build(compose_file, no_cache=req.no_cache, env_file=env_file)
-        docker_ops.compose_up(compose_file, env_file=env_file)
+        provisioner.rebuild_user(
+            user_name=user_name,
+            service_name=service_name,
+            label=label,
+            no_cache=req.no_cache,
+        )
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
     except RuntimeError as e:
         raise HTTPException(500, f"rebuild failed: {e}")
 

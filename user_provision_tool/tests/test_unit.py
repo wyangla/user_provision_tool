@@ -371,3 +371,272 @@ class TestDockerOps:
             return m
         monkeypatch.setattr(docker_ops.subprocess, "run", fail_run)
         docker_ops.nginx_reload("provision-nginx")
+
+
+# ---------------------------------------------------------------------------
+# compose_converter
+# ---------------------------------------------------------------------------
+
+_SAMPLE_NGINX_CONF = """\
+server {
+    listen 80;
+    server_name myapp.example.com;
+
+    auth_basic "My App";
+    auth_basic_user_file /etc/nginx/htpasswd/myapp;
+
+    location / {
+        proxy_pass http://myapp-web:80;
+        proxy_set_header Host $host;
+    }
+}
+"""
+
+
+class TestComposeConverter:
+    """Unit tests for lib/compose_converter module."""
+
+    def _sample_data(self) -> dict:
+        return {
+            "name": "myapp",
+            "services": {
+                "web": {
+                    "image": "nginx:alpine",
+                    "container_name": "myapp-web",
+                    "ports": ["80:80"],
+                    "volumes": ["/data/myapp/html:/usr/share/nginx/html:ro"],
+                    "networks": ["mynet"],
+                },
+                "db": {
+                    "image": "postgres:16",
+                    "container_name": "myapp-db",
+                    "volumes": [
+                        "/var/lib/myapp/db:/var/lib/postgresql/data",
+                        "db_socket:/var/run/postgresql",
+                    ],
+                    "networks": ["mynet"],
+                },
+            },
+            "volumes": {"db_socket": None},
+            "networks": {"mynet": None},
+        }
+
+    def _convert_to_text(self, data: dict) -> tuple[str, dict]:
+        """Run convert() and return (detokenized_yaml_text, src_to_key)."""
+        from lib.compose_converter import convert
+        transformed, src_to_key, tokens = convert(data)
+        raw = yaml.dump(transformed, default_flow_style=False, sort_keys=False)
+        return tokens.detokenize(raw), src_to_key
+
+    def test_convert_strips_name(self):
+        from lib.compose_converter import convert
+        transformed, _, _ = convert(self._sample_data())
+        assert "name" not in transformed
+
+    def test_convert_strips_ports(self):
+        from lib.compose_converter import convert
+        transformed, _, _ = convert(self._sample_data())
+        assert "ports" not in transformed["services"]["web"]
+
+    def test_convert_sets_container_name_template(self):
+        text, _ = self._convert_to_text(self._sample_data())
+        assert "{{ container_prefix }}web" in text
+        assert "{{ container_prefix }}db" in text
+
+    def test_convert_replaces_bind_mounts(self):
+        text, _ = self._convert_to_text(self._sample_data())
+        assert "{{ volumes['" in text
+        assert "/data/myapp/html" not in text
+        assert "/var/lib/myapp/db" not in text
+
+    def test_convert_src_to_key_bind_mounts(self):
+        from lib.compose_converter import convert
+        _, src_to_key, _ = convert(self._sample_data())
+        assert "/data/myapp/html" in src_to_key
+        assert "/var/lib/myapp/db" in src_to_key
+
+    def test_convert_named_volumes_excluded_from_src_to_key(self):
+        from lib.compose_converter import convert
+        _, src_to_key, _ = convert(self._sample_data())
+        assert "db_socket" not in src_to_key
+
+    def test_convert_replaces_networks(self):
+        text, _ = self._convert_to_text(self._sample_data())
+        assert "{{ network_name }}" in text
+
+    def test_convert_adds_named_volume_prefix(self):
+        text, _ = self._convert_to_text(self._sample_data())
+        assert "{{ container_prefix }}db_socket" in text
+
+    def test_convert_preserves_env_vars(self):
+        data = self._sample_data()
+        data["services"]["web"]["environment"] = ["MY_VAR=${MY_ENV_VAR}"]
+        text, _ = self._convert_to_text(data)
+        assert "${MY_ENV_VAR}" in text
+
+    def test_convert_external_volume_unchanged(self):
+        data = self._sample_data()
+        data["volumes"]["shared_vol"] = {"external": True}
+        from lib.compose_converter import convert
+        transformed, _, tokens = convert(data)
+        raw = yaml.dump(transformed, default_flow_style=False, sort_keys=False)
+        text = tokens.detokenize(raw)
+        # External volumes must NOT get a container_prefix name override
+        assert "{{ container_prefix }}shared_vol" not in text
+
+    def test_compose_file_to_template_creates_file(self, tmp_path):
+        from lib.compose_converter import compose_file_to_template
+        src = str(FIXTURES_DIR / "docker-compose.plain.yml")
+        out = str(tmp_path / "output.yml.j2")
+        result = compose_file_to_template(src, out, "myapp")
+        assert Path(out).exists()
+        assert isinstance(result, dict)
+
+    def test_compose_file_to_template_returns_bind_mount_keys(self, tmp_path):
+        from lib.compose_converter import compose_file_to_template
+        src = str(FIXTURES_DIR / "docker-compose.plain.yml")
+        out = str(tmp_path / "output.yml.j2")
+        src_to_key = compose_file_to_template(src, out, "myapp")
+        assert len(src_to_key) > 0
+
+    def test_compose_file_to_template_content_has_jinja2(self, tmp_path):
+        from lib.compose_converter import compose_file_to_template
+        src = str(FIXTURES_DIR / "docker-compose.plain.yml")
+        out = str(tmp_path / "output.yml.j2")
+        compose_file_to_template(src, out, "myapp")
+        content = Path(out).read_text()
+        assert "{{ container_prefix }}" in content
+        assert "{{ network_name }}" in content
+
+    def test_compose_file_to_template_strips_ports(self, tmp_path):
+        from lib.compose_converter import compose_file_to_template
+        src = str(FIXTURES_DIR / "docker-compose.plain.yml")
+        out = str(tmp_path / "output.yml.j2")
+        compose_file_to_template(src, out, "myapp")
+        content = Path(out).read_text()
+        # Strip header comments before checking — the comment mentions "ports:" deliberately
+        yaml_body = "\n".join(
+            line for line in content.splitlines() if not line.startswith("#")
+        )
+        assert "ports:" not in yaml_body
+
+    def test_compose_file_to_template_invalid_raises(self, tmp_path):
+        from lib.compose_converter import compose_file_to_template
+        bad = str(tmp_path / "bad.yml")
+        Path(bad).write_text("just: scalar\n")
+        out = str(tmp_path / "out.yml.j2")
+        with pytest.raises(ValueError, match="services"):
+            compose_file_to_template(bad, out)
+
+    def test_make_header_contains_volume_keys(self):
+        from lib.compose_converter import make_header
+        src_to_key = {"/data/app": "app", "/data/db": "db"}
+        header = make_header(src_to_key, "myapp")
+        assert "app" in header
+        assert "db" in header
+        assert "-v app=/your/path" in header
+
+    def test_make_header_no_volumes(self):
+        from lib.compose_converter import make_header
+        header = make_header({}, "myapp")
+        assert "myapp.yml.j2" in header
+        assert "{{ container_prefix }}" in header
+
+    def test_unique_keys_for_duplicate_basenames(self):
+        """Two bind mounts with the same basename get distinct volume keys."""
+        from lib.compose_converter import convert
+        data = {
+            "services": {
+                "a": {"image": "x", "volumes": ["/alpha/data:/a"]},
+                "b": {"image": "x", "volumes": ["/beta/data:/b"]},
+            }
+        }
+        _, src_to_key, _ = convert(data)
+        keys = list(src_to_key.values())
+        assert len(keys) == len(set(keys)), "Duplicate volume keys generated"
+
+
+# ---------------------------------------------------------------------------
+# nginx_converter
+# ---------------------------------------------------------------------------
+
+
+class TestNginxConverter:
+    """Unit tests for lib/nginx_converter module."""
+
+    def test_convert_server_name(self):
+        from lib.nginx_converter import convert_nginx
+        out = convert_nginx(_SAMPLE_NGINX_CONF)
+        assert "server_name {{ hostname }};" in out
+        assert "myapp.example.com" not in out
+
+    def test_convert_auth_basic(self):
+        from lib.nginx_converter import convert_nginx
+        out = convert_nginx(_SAMPLE_NGINX_CONF)
+        assert 'auth_basic "{{ service_name }} - {{ user_name }}";' in out
+
+    def test_convert_auth_basic_user_file(self):
+        from lib.nginx_converter import convert_nginx
+        out = convert_nginx(_SAMPLE_NGINX_CONF)
+        assert "auth_basic_user_file {{ htpasswd_path }};" in out
+
+    def test_convert_proxy_pass_with_hint(self):
+        from lib.nginx_converter import convert_nginx
+        out = convert_nginx(_SAMPLE_NGINX_CONF, service_name_hint="myapp")
+        assert "proxy_pass http://{{ container_prefix }}web:80;" in out
+        assert "myapp-web" not in out
+
+    def test_convert_proxy_pass_without_hint(self):
+        from lib.nginx_converter import convert_nginx
+        out = convert_nginx(_SAMPLE_NGINX_CONF)
+        # Without a service_name_hint, proxy_pass target is not rewritten
+        assert "proxy_pass http://myapp-web:80;" in out
+
+    def test_convert_preserves_proxy_headers(self):
+        from lib.nginx_converter import convert_nginx
+        out = convert_nginx(_SAMPLE_NGINX_CONF)
+        assert "proxy_set_header Host $host;" in out
+
+    def test_convert_no_auth_basic_untouched_when_absent(self):
+        from lib.nginx_converter import convert_nginx
+        conf = "server { listen 80; server_name example.com; }\n"
+        out = convert_nginx(conf)
+        assert "auth_basic" not in out
+
+    def test_nginx_file_to_template_creates_file(self, tmp_path):
+        from lib.nginx_converter import nginx_file_to_template
+        src = str(FIXTURES_DIR / "myapp.plain.nginx.conf")
+        out = str(tmp_path / "myapp.nginx.conf.j2")
+        nginx_file_to_template(src, out, "myapp")
+        assert Path(out).exists()
+
+    def test_nginx_file_to_template_has_header(self, tmp_path):
+        from lib.nginx_converter import nginx_file_to_template
+        src = str(FIXTURES_DIR / "myapp.plain.nginx.conf")
+        out = str(tmp_path / "myapp.nginx.conf.j2")
+        nginx_file_to_template(src, out, "myapp")
+        content = Path(out).read_text()
+        assert "generated by gen_nginx_template.py" in content
+
+    def test_nginx_file_to_template_transforms_content(self, tmp_path):
+        from lib.nginx_converter import nginx_file_to_template
+        src = str(FIXTURES_DIR / "myapp.plain.nginx.conf")
+        out = str(tmp_path / "out.j2")
+        nginx_file_to_template(src, out, "myapp")
+        content = Path(out).read_text()
+        assert "{{ hostname }}" in content
+        assert "{{ htpasswd_path }}" in content
+        assert "{{ container_prefix }}" in content
+
+    def test_make_header_includes_hint(self):
+        from lib.nginx_converter import make_header
+        header = make_header("myapp.nginx.conf", "myapp")
+        assert "myapp" in header
+        assert "generated by gen_nginx_template.py" in header
+
+    def test_make_header_lists_template_vars(self):
+        from lib.nginx_converter import make_header
+        header = make_header("test.conf", "svc")
+        assert "{{ hostname }}" in header
+        assert "{{ container_prefix }}" in header
+        assert "{{ htpasswd_path }}" in header

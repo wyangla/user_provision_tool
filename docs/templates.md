@@ -47,7 +47,7 @@ All compose variables are available, plus:
 | Variable | Example value | Description |
 |---|---|---|
 | `{{ hostname }}` | `myapp-alice-0.example.com` | Derived as `{service}-{user}-{label}.{domain}` |
-| `{{ htpasswd_path }}` | `/srv/provision/generated/myapp.user-alice-0.htpasswd` | Absolute path to the generated `.htpasswd` file |
+| `{{ htpasswd_path }}` | `/srv/provision/generated/myapp.user-alice.0.htpasswd` | Absolute path to the generated `.htpasswd` file in `GENERATED_DIR` |
 
 ---
 
@@ -105,20 +105,20 @@ server {
 If you supply an `.env` file path at registration time (`env_file_path` in the API,
 `--env-file` in the CLI), the tool:
 
-1. Copies the `.env` file to `generated/` next to the rendered compose file.
+1. Copies the `.env` file next to the rendered compose file (in the project root).
 2. Passes `--env-file <copied-path>` to every `docker compose` invocation for that service.
 
 ```
 Registration
-  ├─ template rendered → generated/docker-compose.myapp-user_alice-0.yml
-  └─ .env copied       → generated/myapp-user_alice-0.env
+  ├─ template rendered → source_projects/myapp/docker-compose.user-alice.0.yml
+  └─ .env copied       → source_projects/myapp/myapp.env
 
-docker compose -f ...myapp-user_alice-0.yml --env-file ...myapp-user_alice-0.env up -d
-                                             └─ resolves ${ENV_VAR} placeholders at start
+docker compose -f ...docker-compose.user-alice.0.yml --env-file ...myapp.env up -d
+                                                      └─ resolves ${ENV_VAR} at start
 ```
 
-The `.env` path stored in the registry always points to the **copied** file inside `generated/`,
-so both `compose_up` and `compose_down` use the same resolved path.
+The `.env` path stored in the registry always points to the **copied** file in the project
+root, so `compose_up`, `compose_down`, and `compose_build` all use the same resolved path.
 
 ---
 
@@ -134,15 +134,58 @@ At registration time it cross-checks these keys against the `volumes` map you pr
 
 ---
 
+## Automatic Template Generation
+
+If you have a working `docker-compose.yml` or nginx conf but no `.j2` template yet, the
+tool can generate one automatically.
+
+**Via `register.py` flags** (convert + register in one step):
+```bash
+# -fc: convert docker-compose.yml → .yml.j2, then register
+python cli/register.py -pr /srv/provision/source_projects/myapp \
+  -fc docker-compose.yml -fn nginx.conf -u alice -sn myapp ...
+```
+
+**Via standalone scripts** (generate template only, no registration):
+```bash
+python cli/gen_compose_template.py source_projects/myapp/docker-compose.yml -s myapp
+# → writes source_projects/myapp/docker-compose.yml.j2
+
+python cli/gen_nginx_template.py source_projects/myapp/nginx.conf -s myapp
+# → writes source_projects/myapp/nginx.conf.j2
+```
+
+The converters apply these substitutions:
+
+| Directive (compose) | Transformation |
+|---|---|
+| `container_name` | `→ {{ container_prefix }}{suffix}` |
+| bind-mount source paths | `→ {{ volumes['key'] }}` |
+| network names | `→ {{ network_name }}` |
+| named volume keys | `→ {{ volumes['key'] }}` |
+| `name:` and `ports:` | stripped |
+
+| Directive (nginx) | Transformation |
+|---|---|
+| `server_name` | `→ {{ hostname }}` |
+| `auth_basic` | `→ {{ service_name }} — {{ user_name }}` |
+| `auth_basic_user_file` | `→ {{ htpasswd_path }}` |
+| `proxy_pass` host prefixed with service name | `→ {{ container_prefix }}{suffix}` |
+
+---
+
 ## Naming Conventions for Template Files
 
 There is no enforced naming convention, but the recommended pattern is:
 
 ```
-{service_name}.yml.j2              ← compose template
-{service_name}.nginx.conf.j2       ← nginx conf template
-{service_name}.env                 ← runtime secrets (.env)
+source_projects/{service_name}/
+  docker-compose.{service_name}.yml.j2   ← compose template
+  {service_name}.nginx.conf.j2           ← nginx conf template
+  {service_name}.env                     ← runtime secrets (.env)
+  Dockerfile                             ← image build context
 ```
 
-Store these in a directory that is bind-mounted into the provision-api container
-(e.g., `${PROVISION_DIR}/templates/`).
+This layout keeps all source files together so that `build: .` in compose templates
+resolves to the correct directory, and the rendered per-user compose file lands next to
+the Dockerfile.

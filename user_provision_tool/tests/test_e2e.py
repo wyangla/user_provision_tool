@@ -81,7 +81,14 @@ def registered_alice(
     monkeypatch: pytest.MonkeyPatch,
 ) -> dict:
     """Run cli.register for alice and return the registry entry."""
+    import shutil
     import cli.register as reg_script
+
+    # Copy templates into tmp_path so it can serve as the project root
+    compose_tpl = "docker-compose.template.yml.j2"
+    nginx_tpl = "myapp.template.nginx.conf.j2"
+    shutil.copy(FIXTURES_DIR / compose_tpl, tmp_path / compose_tpl)
+    shutil.copy(FIXTURES_DIR / nginx_tpl, tmp_path / nginx_tpl)
 
     monkeypatch.setattr("getpass.getpass", lambda prompt="": "secret123")
     monkeypatch.setattr("builtins.input", lambda prompt="": "y")
@@ -90,8 +97,9 @@ def registered_alice(
         "cli/register.py",
         "-u", "alice",
         "-sn", "myapp",
-        "-tc", COMPOSE_TEMPLATE,
-        "-tn", NGINX_TEMPLATE,
+        "-pr", str(tmp_path),
+        "-tc", compose_tpl,
+        "-tn", nginx_tpl,
         "-l", "0",
         "-d", "example.com",
         "-v", "app_data=/srv/alice/app",
@@ -152,14 +160,16 @@ class TestE2ERegistration:
         assert len(up_calls) >= 1
 
     def test_duplicate_registration_fails(
-        self, registered_alice, mock_docker, monkeypatch
+        self, registered_alice, mock_docker, monkeypatch, tmp_path
     ):
         import cli.register as reg_script
         monkeypatch.setattr("getpass.getpass", lambda prompt="": "secret123")
         sys_argv = [
             "cli/register.py",
             "-u", "alice", "-sn", "myapp",
-            "-tc", COMPOSE_TEMPLATE, "-l", "0",
+            "-pr", str(tmp_path),
+            "-tc", "docker-compose.template.yml.j2",
+            "-l", "0",
             "-v", "app_data=/srv/alice/app",
             "-v", "db_data=/srv/alice/db",
         ]
@@ -168,41 +178,49 @@ class TestE2ERegistration:
                 reg_script.main()
         assert exc.value.code != 0
 
-    def test_invalid_username_rejected(self, mock_docker, monkeypatch):
+    def test_invalid_username_rejected(self, mock_docker, monkeypatch, tmp_path):
         import cli.register as reg_script
         monkeypatch.setattr("getpass.getpass", lambda prompt="": "")
         sys_argv = [
             "cli/register.py",
             "-u", "alice!", "-sn", "myapp",
-            "-tc", COMPOSE_TEMPLATE, "-l", "0",
+            "-pr", str(tmp_path),
+            "-tc", "docker-compose.template.yml.j2",
+            "-l", "0",
         ]
         with patch.object(sys, "argv", sys_argv):
             with pytest.raises(SystemExit) as exc:
                 reg_script.main()
         assert exc.value.code != 0
 
-    def test_invalid_label_rejected(self, mock_docker, monkeypatch):
+    def test_invalid_label_rejected(self, mock_docker, monkeypatch, tmp_path):
         import cli.register as reg_script
         monkeypatch.setattr("getpass.getpass", lambda prompt="": "")
         sys_argv = [
             "cli/register.py",
             "-u", "alice", "-sn", "myapp",
-            "-tc", COMPOSE_TEMPLATE, "-l", "abc",
+            "-pr", str(tmp_path),
+            "-tc", "docker-compose.template.yml.j2",
+            "-l", "abc",
         ]
         with patch.object(sys, "argv", sys_argv):
             with pytest.raises(SystemExit) as exc:
                 reg_script.main()
         assert exc.value.code != 0
 
-    def test_volume_mismatch_abort(self, mock_docker, monkeypatch):
+    def test_volume_mismatch_abort(self, mock_docker, monkeypatch, tmp_path):
         """When volumes don't match and user types 'n', registration aborts."""
+        import shutil
         import cli.register as reg_script
+        compose_tpl = "docker-compose.template.yml.j2"
+        shutil.copy(FIXTURES_DIR / compose_tpl, tmp_path / compose_tpl)
         monkeypatch.setattr("getpass.getpass", lambda prompt="": "")
         monkeypatch.setattr("builtins.input", lambda prompt="": "n")
         sys_argv = [
             "cli/register.py",
             "-u", "carol", "-sn", "myapp",
-            "-tc", COMPOSE_TEMPLATE, "-l", "0",
+            "-pr", str(tmp_path),
+            "-tc", compose_tpl, "-l", "0",
             # intentionally omit volumes to trigger the mismatch warning
         ]
         with patch.object(sys, "argv", sys_argv):
@@ -211,17 +229,21 @@ class TestE2ERegistration:
         assert exc.value.code == 0  # exits cleanly with "Aborted"
         assert reg_mod.get_user_service("carol", "myapp", "0") is None
 
-    def test_volume_mismatch_confirm_continues(self, mock_docker, monkeypatch):
+    def test_volume_mismatch_confirm_continues(self, mock_docker, monkeypatch, tmp_path):
         """When volumes don't match and user types 'y', registration proceeds.
         We supply app_data/db_data (not in template detection list → triggers
         'extra' warning) so the compose template can still render."""
+        import shutil
         import cli.register as reg_script
+        compose_tpl = "docker-compose.template.yml.j2"
+        shutil.copy(FIXTURES_DIR / compose_tpl, tmp_path / compose_tpl)
         monkeypatch.setattr("getpass.getpass", lambda prompt="": "")
         monkeypatch.setattr("builtins.input", lambda prompt="": "y")
         sys_argv = [
             "cli/register.py",
             "-u", "dave", "-sn", "myapp",
-            "-tc", COMPOSE_TEMPLATE, "-l", "0",
+            "-pr", str(tmp_path),
+            "-tc", compose_tpl, "-l", "0",
             "-v", "app_data=/data/dave/app",
             "-v", "db_data=/data/dave/db",
         ]
@@ -231,14 +253,20 @@ class TestE2ERegistration:
 
     def test_two_users_have_isolated_networks(self, tmp_path, mock_docker, monkeypatch):
         """Different users must get different network names in the registry."""
+        import shutil
         import cli.register as reg_script
+        compose_tpl = "docker-compose.template.yml.j2"
         for user, label in [("alice", "0"), ("bob", "1")]:
+            user_root = tmp_path / f"project_{user}"
+            user_root.mkdir()
+            shutil.copy(FIXTURES_DIR / compose_tpl, user_root / compose_tpl)
             monkeypatch.setattr("getpass.getpass", lambda prompt="": "")
             monkeypatch.setattr("builtins.input", lambda prompt="": "y")
             sys_argv = [
                 "cli/register.py",
                 "-u", user, "-sn", "myapp",
-                "-tc", COMPOSE_TEMPLATE,
+                "-pr", str(user_root),
+                "-tc", compose_tpl,
                 "-l", label,
                 "-v", f"app_data=/data/{user}/app",
                 "-v", f"db_data=/data/{user}/db",
@@ -415,13 +443,19 @@ class TestE2EStatus:
         import cli.status as st_script
 
         # Register alice and bob
+        import shutil
+        compose_tpl = "docker-compose.template.yml.j2"
         for user, label in [("alice", "0"), ("bob", "1")]:
+            user_root = tmp_path / f"project_{user}"
+            user_root.mkdir()
+            shutil.copy(FIXTURES_DIR / compose_tpl, user_root / compose_tpl)
             monkeypatch.setattr("getpass.getpass", lambda prompt="": "")
             monkeypatch.setattr("builtins.input", lambda prompt="": "y")
             sys_argv = [
                 "cli/register.py",
                 "-u", user, "-sn", "myapp",
-                "-tc", COMPOSE_TEMPLATE,
+                "-pr", str(user_root),
+                "-tc", compose_tpl,
                 "-l", label,
                 "-v", f"app_data=/data/{user}/app",
                 "-v", f"db_data=/data/{user}/db",
@@ -462,13 +496,19 @@ class TestE2EFullLifecycle:
         import cli.status as st_script
 
         # 1. Register
+        import shutil
+        compose_tpl = "docker-compose.template.yml.j2"
+        nginx_tpl = "myapp.template.nginx.conf.j2"
+        shutil.copy(FIXTURES_DIR / compose_tpl, tmp_path / compose_tpl)
+        shutil.copy(FIXTURES_DIR / nginx_tpl, tmp_path / nginx_tpl)
         monkeypatch.setattr("getpass.getpass", lambda prompt="": "pass1")
         monkeypatch.setattr("builtins.input", lambda prompt="": "y")
         sys_argv = [
             "cli/register.py",
             "-u", "lifecycle_user", "-sn", "myapp",
-            "-tc", COMPOSE_TEMPLATE,
-            "-tn", NGINX_TEMPLATE,
+            "-pr", str(tmp_path),
+            "-tc", compose_tpl,
+            "-tn", nginx_tpl,
             "-l", "5",
             "-d", "test.local",
             "-v", "app_data=/data/lc/app",
@@ -519,3 +559,174 @@ class TestE2EFullLifecycle:
             if "down" in (c.args[0] if c.args else [])
         ]
         assert len(down_calls) >= 1
+
+
+# ---------------------------------------------------------------------------
+# E2E: Converter integration  (-fc / -fn flags)
+# ---------------------------------------------------------------------------
+
+class TestE2EConverterIntegration:
+    """E2E tests for register.py using -fc (plain compose) and -fn (plain nginx)
+    flags that trigger automatic conversion to Jinja2 templates."""
+
+    def test_register_with_fc_flag(self, tmp_path, mock_docker, monkeypatch):
+        """-fc converts a plain docker-compose.yml before registering."""
+        import shutil
+        import cli.register as reg_script
+
+        shutil.copy(FIXTURES_DIR / "docker-compose.plain.yml", tmp_path / "docker-compose.plain.yml")
+        monkeypatch.setattr("getpass.getpass", lambda prompt="": "")
+        monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+        sys_argv = [
+            "cli/register.py",
+            "-u", "alice", "-sn", "myapp",
+            "-pr", str(tmp_path),
+            "-fc", "docker-compose.plain.yml",
+            "-l", "0",
+            "-v", "html=/srv/alice/html",
+            "-v", "db=/srv/alice/db",
+        ]
+        with patch.object(sys, "argv", sys_argv):
+            reg_script.main()
+
+        entry = reg_mod.get_user_service("alice", "myapp", "0")
+        assert entry is not None
+        # A .j2 template must have been generated alongside the plain file
+        assert (tmp_path / "docker-compose.plain.yml.j2").exists() or any(
+            (tmp_path / p).exists() for p in ["docker-compose.plain.j2", "docker-compose.yml.j2"]
+        )
+
+    def test_register_with_fc_generates_valid_compose(self, tmp_path, mock_docker, monkeypatch):
+        """The compose file rendered from a -fc conversion is valid YAML with services."""
+        import shutil
+        import cli.register as reg_script
+
+        shutil.copy(FIXTURES_DIR / "docker-compose.plain.yml", tmp_path / "docker-compose.plain.yml")
+        monkeypatch.setattr("getpass.getpass", lambda prompt="": "")
+        monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+        sys_argv = [
+            "cli/register.py",
+            "-u", "alice", "-sn", "myapp",
+            "-pr", str(tmp_path),
+            "-fc", "docker-compose.plain.yml",
+            "-l", "0",
+            "-v", "html=/srv/alice/html",
+            "-v", "db=/srv/alice/db",
+        ]
+        with patch.object(sys, "argv", sys_argv):
+            reg_script.main()
+
+        entry = reg_mod.get_user_service("alice", "myapp", "0")
+        compose_path = Path(entry["compose_file_path"])
+        assert compose_path.exists()
+        data = yaml.safe_load(compose_path.read_text())
+        assert "services" in data
+        assert data["services"]["web"]["container_name"] == "myapp-user_alice-0-web"
+
+    def test_register_with_fn_flag(self, tmp_path, mock_docker, monkeypatch):
+        """-fn converts a plain nginx.conf before registering."""
+        import shutil
+        import cli.register as reg_script
+
+        shutil.copy(FIXTURES_DIR / "docker-compose.template.yml.j2", tmp_path / "docker-compose.template.yml.j2")
+        shutil.copy(FIXTURES_DIR / "myapp.plain.nginx.conf", tmp_path / "myapp.plain.nginx.conf")
+        monkeypatch.setattr("getpass.getpass", lambda prompt="": "")
+        monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+        sys_argv = [
+            "cli/register.py",
+            "-u", "alice", "-sn", "myapp",
+            "-pr", str(tmp_path),
+            "-tc", "docker-compose.template.yml.j2",
+            "-fn", "myapp.plain.nginx.conf",
+            "-l", "0",
+            "-d", "example.com",
+            "-v", "app_data=/srv/alice/app",
+            "-v", "db_data=/srv/alice/db",
+        ]
+        with patch.object(sys, "argv", sys_argv):
+            reg_script.main()
+
+        entry = reg_mod.get_user_service("alice", "myapp", "0")
+        assert entry is not None
+        # A .j2 template should exist for the nginx conf
+        assert (tmp_path / "myapp.plain.nginx.conf.j2").exists()
+
+    def test_register_with_fn_generates_valid_nginx_conf(self, tmp_path, mock_docker, monkeypatch):
+        """The nginx conf rendered from a -fn conversion has correct server_name."""
+        import shutil
+        import cli.register as reg_script
+
+        shutil.copy(FIXTURES_DIR / "docker-compose.template.yml.j2", tmp_path / "docker-compose.template.yml.j2")
+        shutil.copy(FIXTURES_DIR / "myapp.plain.nginx.conf", tmp_path / "myapp.plain.nginx.conf")
+        monkeypatch.setattr("getpass.getpass", lambda prompt="": "")
+        monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+        sys_argv = [
+            "cli/register.py",
+            "-u", "alice", "-sn", "myapp",
+            "-pr", str(tmp_path),
+            "-tc", "docker-compose.template.yml.j2",
+            "-fn", "myapp.plain.nginx.conf",
+            "-l", "0",
+            "-d", "example.com",
+            "-v", "app_data=/srv/alice/app",
+            "-v", "db_data=/srv/alice/db",
+        ]
+        with patch.object(sys, "argv", sys_argv):
+            reg_script.main()
+
+        entry = reg_mod.get_user_service("alice", "myapp", "0")
+        nginx_path = Path(entry["nginx_conf_path"])
+        assert nginx_path.exists()
+        content = nginx_path.read_text()
+        assert "server_name myapp-alice-0.example.com;" in content
+
+    def test_fc_and_tc_are_mutually_exclusive(self, tmp_path, mock_docker, monkeypatch):
+        """Passing both -fc and -tc must fail with non-zero exit."""
+        import cli.register as reg_script
+        monkeypatch.setattr("getpass.getpass", lambda prompt="": "")
+        sys_argv = [
+            "cli/register.py",
+            "-u", "alice", "-sn", "myapp",
+            "-pr", str(tmp_path),
+            "-tc", "compose.yml.j2",
+            "-fc", "compose.yml",
+            "-l", "0",
+        ]
+        with patch.object(sys, "argv", sys_argv):
+            with pytest.raises(SystemExit) as exc:
+                reg_script.main()
+        assert exc.value.code != 0
+
+    def test_fn_and_tn_are_mutually_exclusive(self, tmp_path, mock_docker, monkeypatch):
+        """Passing both -fn and -tn must fail with non-zero exit."""
+        import cli.register as reg_script
+        monkeypatch.setattr("getpass.getpass", lambda prompt="": "")
+        sys_argv = [
+            "cli/register.py",
+            "-u", "alice", "-sn", "myapp",
+            "-pr", str(tmp_path),
+            "-tc", "compose.yml.j2",
+            "-tn", "nginx.conf.j2",
+            "-fn", "nginx.conf",
+            "-l", "0",
+        ]
+        with patch.object(sys, "argv", sys_argv):
+            with pytest.raises(SystemExit) as exc:
+                reg_script.main()
+        assert exc.value.code != 0
+
+    def test_fc_missing_file_exits_nonzero(self, tmp_path, mock_docker, monkeypatch):
+        """-fc pointing to a non-existent file exits with non-zero code."""
+        import cli.register as reg_script
+        monkeypatch.setattr("getpass.getpass", lambda prompt="": "")
+        sys_argv = [
+            "cli/register.py",
+            "-u", "alice", "-sn", "myapp",
+            "-pr", str(tmp_path),
+            "-fc", "does-not-exist.yml",
+            "-l", "0",
+        ]
+        with patch.object(sys, "argv", sys_argv):
+            with pytest.raises(SystemExit) as exc:
+                reg_script.main()
+        assert exc.value.code != 0

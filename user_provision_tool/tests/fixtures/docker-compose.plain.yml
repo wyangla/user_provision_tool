@@ -1,0 +1,28 @@
+name: myapp
+services:
+  web:
+    image: nginx:alpine
+    container_name: myapp-web
+    ports:
+      - "80:80"
+    volumes:
+      - /data/myapp/html:/usr/share/nginx/html:ro
+    depends_on:
+      - db
+    networks:
+      - mynet
+
+  db:
+    image: postgres:16-alpine
+    container_name: myapp-db
+    volumes:
+      - /var/lib/myapp/db:/var/lib/postgresql/data
+      - db_socket:/var/run/postgresql
+    networks:
+      - mynet
+
+volumes:
+  db_socket:
+
+networks:
+  mynet:

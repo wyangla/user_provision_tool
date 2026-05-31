@@ -1,8 +1,25 @@
 """cli/register.py — register a user and start their service containers.
 
 Usage:
-    python cli/register.py -u USER_NAME -sn SERVICE_NAME -tc COMPOSE_TEMPLATE
-        [-v KEY=VALUE ...] [-e ENV_FILE] [-tn NGINX_TEMPLATE] [-l LABEL] [-d DOMAIN]
+    python cli/register.py -u USER_NAME -sn SERVICE_NAME
+        -pr PROJECT_ROOT
+        { -tc COMPOSE_TEMPLATE | -fc COMPOSE_FILE }
+        [-v KEY=VALUE ...] [-e ENV_FILE]
+        [-tn NGINX_TEMPLATE | -fn NGINX_FILE]
+        [-l LABEL] [-d DOMAIN]
+
+-pr  Project root directory (e.g. source_project/service_1).
+       • All generated files (rendered compose, nginx conf, htpasswd) are
+         written here so they live alongside the Dockerfile / source tree
+       • 'build: .' contexts in compose files resolve correctly
+-tc  Filename of an existing Jinja2 compose template (.yml.j2) inside project root.
+-fc  Filename of a plain docker-compose.yml inside project root.
+     Converted to a .j2 template before registration.  Mutually exclusive
+     with -tc.
+-tn  Filename of an existing Jinja2 nginx conf template (.nginx.conf.j2) inside project root.
+-fn  Filename of a plain nginx conf file inside project root.
+     Converted to a .j2 template before registration.  Mutually exclusive
+     with -tn.
 """
 
 from __future__ import annotations
@@ -16,7 +33,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import os
 
-from lib import auth, docker_ops, registry, template_engine, validation
+from lib import auth, provisioner, template_engine, validation
+from lib.compose_converter import compose_file_to_template
+from lib.nginx_converter import nginx_file_to_template
 
 GENERATED_DIR = Path(
     os.environ.get("GENERATED_DIR", str(Path(__file__).parent.parent / "generated"))
@@ -27,13 +46,40 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Register a user and start their service containers.")
     p.add_argument("-u", "--user-name", required=True, help="User name")
     p.add_argument("-sn", "--service-name", required=True, help="Service name")
-    p.add_argument("-tc", "--compose-template", required=True, help="Path to docker-compose template")
+    p.add_argument("-pr", "--project-root", required=True,
+        help=(
+            "Project root directory (e.g. source_project/service_1). "
+            "Generated files are written here; all source filenames (-tc/-fc/-tn/-fn) "
+            "are resolved relative to this directory."
+        ),
+    )
+
+    src_group = p.add_mutually_exclusive_group(required=True)
+    src_group.add_argument(
+        "-tc", "--compose-template",
+        help="Filename of an existing Jinja2 compose template (.yml.j2) inside project root.",
+    )
+    src_group.add_argument(
+        "-fc", "--compose-file",
+        help="Filename of a plain docker-compose.yml inside project root. Converted to .yml.j2 before registration.",
+    )
+
     p.add_argument("-v", "--volume", action="append", default=[],
         metavar="KEY=VALUE",
         help="Volume mapping (can be repeated): template_volume=host_path",
     )
     p.add_argument("-e", "--env-file", default=None, help="Path to .env file for docker compose variable substitution")
-    p.add_argument("-tn", "--nginx-template", default=None, help="Path to nginx conf template")
+
+    nginx_group = p.add_mutually_exclusive_group()
+    nginx_group.add_argument(
+        "-tn", "--nginx-template",
+        help="Filename of an existing Jinja2 nginx conf template (.nginx.conf.j2) inside project root.",
+    )
+    nginx_group.add_argument(
+        "-fn", "--nginx-file",
+        help="Filename of a plain nginx conf file inside project root. Converted to .j2 before registration.",
+    )
+
     p.add_argument("-l", "--label", default="0", help="Label (digits only, default: 0)")
     p.add_argument("-d", "--domain", default="localhost", help="Domain name for nginx hostname")
     return p.parse_args()
@@ -82,10 +128,40 @@ def main() -> None:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 
-    compose_template = str(Path(args.compose_template).resolve())
-    if not Path(compose_template).exists():
-        print(f"ERROR: compose template not found: {compose_template}", file=sys.stderr)
+    # --- Resolve project root ---
+    project_root = Path(args.project_root).resolve()
+    if not project_root.is_dir():
+        print(f"ERROR: project root not found: {project_root}", file=sys.stderr)
         sys.exit(1)
+
+    # --- Resolve compose template (-tc used directly; -fc triggers conversion) ---
+    if args.compose_template:
+        compose_src = project_root / args.compose_template
+        if not compose_src.exists():
+            print(f"ERROR: compose template not found: {compose_src}", file=sys.stderr)
+            sys.exit(1)
+        compose_template = str(compose_src)
+    else:
+        compose_src = project_root / args.compose_file
+        if not compose_src.exists():
+            print(f"ERROR: compose file not found: {compose_src}", file=sys.stderr)
+            sys.exit(1)
+        src = compose_src
+        template_out = str(src.parent / f"{src.stem}.yml.j2")
+        try:
+            src_to_key = compose_file_to_template(
+                str(compose_src), template_out, service_name_hint=args.service_name
+            )
+        except ValueError as exc:
+            print(f"ERROR: could not convert compose file: {exc}", file=sys.stderr)
+            sys.exit(1)
+        compose_template = template_out
+        print(f"[0/4] Converted compose file to template: {compose_template}")
+        if src_to_key:
+            col = max(len(k) for k in src_to_key.values())
+            for s, k in src_to_key.items():
+                print(f"       volume key '{k}'  ←  {s}")
+            print("       Pass these with -v KEY=HOST_PATH (or omit to be warned).")
 
     env_file: str | None = None
     if args.env_file:
@@ -94,105 +170,74 @@ def main() -> None:
             print(f"ERROR: env file not found: {env_file}", file=sys.stderr)
             sys.exit(1)
 
+    # --- Resolve nginx template (-tn used directly; -fn triggers conversion) ---
     nginx_template: str | None = None
     if args.nginx_template:
-        nginx_template = str(Path(args.nginx_template).resolve())
-        if not Path(nginx_template).exists():
-            print(f"ERROR: nginx template not found: {nginx_template}", file=sys.stderr)
+        nginx_src = project_root / args.nginx_template
+        if not nginx_src.exists():
+            print(f"ERROR: nginx template not found: {nginx_src}", file=sys.stderr)
             sys.exit(1)
+        nginx_template = str(nginx_src)
+    elif args.nginx_file:
+        nginx_src = project_root / args.nginx_file
+        if not nginx_src.exists():
+            print(f"ERROR: nginx file not found: {nginx_src}", file=sys.stderr)
+            sys.exit(1)
+        template_out = str(nginx_src.parent / f"{nginx_src.name}.j2")
+        try:
+            nginx_file_to_template(str(nginx_src), template_out, args.service_name)
+        except Exception as exc:
+            print(f"ERROR: could not convert nginx file: {exc}", file=sys.stderr)
+            sys.exit(1)
+        nginx_template = template_out
+        print(f"[0/4] Converted nginx file to template: {nginx_template}")
 
-    # --- Check for duplicate registration ---
-    existing = registry.get_user_service(args.user_name, args.service_name, args.label)
-    if existing:
-        print(
-            f"ERROR: User '{args.user_name}' with service '{args.service_name}' "
-            f"and label '{args.label}' is already registered.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    # --- Volume validation ---
+    # --- Volume validation (interactive) ---
     volumes = parse_volumes(args.volume)
     volumes = check_volumes(compose_template, volumes)
 
-    # --- Password ---
+    # --- Password prompt ---
     try:
         passwd = auth.prompt_password(args.user_name)
     except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 
-    passwd_hash = auth.hash_password(args.user_name, passwd) if passwd else ""
-
-    # --- Prepare output paths ---
-    GENERATED_DIR.mkdir(parents=True, exist_ok=True)
-    compose_out = str(
-        GENERATED_DIR / f"docker-compose.user-{args.user_name}.{args.label}.yml"
-    )
-    nginx_out: str | None = None
-    htpasswd_out: str | None = None
-    if nginx_template:
-        nginx_out = str(
-            GENERATED_DIR / f"{args.service_name}.user-{args.user_name}.{args.label}.nginx.conf"
-        )
-        htpasswd_out = str(
-            GENERATED_DIR / f"{args.service_name}.user-{args.user_name}.{args.label}.htpasswd"
-        )
-
-    # --- Registry entry ---
-    entry: dict = {
-        "user_name": args.user_name,
-        "passwd": passwd_hash,
-        "service_name": args.service_name,
-        "label": args.label,
-        "network_name": template_engine.user_network_name(args.service_name, args.user_name, args.label),
-        "compose_template_path": compose_template,
-        "nginx_conf_template_path": nginx_template,
-        "env_file_path": env_file,
-        "compose_file_path": compose_out,
-        "nginx_conf_path": nginx_out,
-        "htpasswd_path": htpasswd_out,
-        "volumes": volumes,
-    }
-    registry.add_user(entry)
-    print(f"[1/4] Registered user '{args.user_name}' in user_registry.yml")
-
-    # --- Render compose file ---
-    copied_env = template_engine.render_compose(
-        compose_template, compose_out,
-        args.user_name, args.service_name, args.label, volumes,
-        env_file=env_file,
-    )
-    print(f"[2/4] Generated compose file: {compose_out}")
-    if copied_env:
-        print(f"[2/4] Copied env file to: {copied_env}")
-
-    # --- Render nginx conf ---
-    if nginx_template and nginx_out and htpasswd_out:
-        if passwd_hash:
-            auth.write_htpasswd_file(htpasswd_out, args.user_name, passwd_hash)
-            print(f"[3/4] Generated htpasswd file: {htpasswd_out}")
-        else:
-            print("[3/4] No password set; skipping htpasswd file.")
-            htpasswd_out_render = ""
-        htpasswd_out_render = htpasswd_out if passwd_hash else ""
-        template_engine.render_nginx_conf(
-            nginx_template, nginx_out,
-            args.user_name, args.service_name, args.label,
-            args.domain, htpasswd_out_render,
-        )
-        print(f"[3/4] Generated nginx conf: {nginx_out}")
-    else:
-        print("[3/4] No nginx template provided; skipping.")
-
-    # --- Start containers ---
-    print("[4/4] Starting containers...")
+    # --- Core registration workflow ---
     try:
-        docker_ops.compose_up(compose_out, env_file=copied_env)
+        result = provisioner.register_user(
+            user_name=args.user_name,
+            service_name=args.service_name,
+            label=args.label,
+            compose_template=compose_template,
+            output_dir=project_root,
+            nginx_output_dir=GENERATED_DIR,
+            volumes=volumes,
+            passwd=passwd,
+            nginx_template=nginx_template,
+            domain=args.domain,
+            env_file=env_file,
+        )
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
     except RuntimeError as e:
         print(f"ERROR starting containers: {e}", file=sys.stderr)
         sys.exit(1)
 
+    entry = result["entry"]
+    print(f"[1/4] Registered user '{args.user_name}' in user_registry.yml")
+    print(f"[2/4] Generated compose file: {entry['compose_file_path']}")
+    if result["copied_env"]:
+        print(f"[2/4] Copied env file to: {result['copied_env']}")
+    if nginx_template:
+        if entry["passwd"]:
+            print(f"[3/4] Generated htpasswd file: {entry['htpasswd_path']}")
+        else:
+            print("[3/4] No password set; skipping htpasswd file.")
+        print(f"[3/4] Generated nginx conf: {entry['nginx_conf_path']}")
+    else:
+        print("[3/4] No nginx template provided; skipping.")
     print(f"\nDone. User '{args.user_name}' registered and containers started.")
 
 

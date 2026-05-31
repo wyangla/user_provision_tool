@@ -77,7 +77,7 @@ export PROVISION_DIR=/srv/provision
 export PROVISION_API_PORT=8765
 
 # 2. Create the provision directory structure
-mkdir -p $PROVISION_DIR/generated $PROVISION_DIR/templates
+mkdir -p $PROVISION_DIR/generated $PROVISION_DIR/source_projects
 
 # 3. Start (builds image on first run)
 docker compose -f docker-compose.provision.yml up -d --build
@@ -96,17 +96,18 @@ docker compose -f docker-compose.provision.yml down
 
 ```
 PROVISION_DIR/
-├── templates/
-│   ├── myapp.yml.j2               ← compose template (you provide)
-│   ├── myapp.nginx.conf.j2        ← nginx template   (you provide)
-│   └── myapp.env                  ← runtime secrets   (you provide)
+├── source_projects/              ← your service source trees (bind-mounted same-path)
+│   └── myapp/
+│       ├── Dockerfile
+│       ├── docker-compose.myapp.yml.j2    ← compose template (you provide)
+│       ├── myapp.nginx.conf.j2            ← nginx template   (you provide)
+│       ├── myapp.env                      ← runtime secrets   (you provide)
+│       └── docker-compose.user-alice.0.yml ← rendered per-user compose (written by tool)
 │
-└── generated/                     ← written by provision-api
+└── generated/                    ← written by provision-api
     ├── user_registry.yml
-    ├── docker-compose.myapp-user_alice-0.yml
-    ├── myapp.user-alice-0.nginx.conf
-    ├── myapp-user_alice-0.env     ← copy of myapp.env
-    └── myapp.user-alice-0.htpasswd
+    ├── myapp.user-alice.0.nginx.conf
+    └── myapp.user-alice.0.htpasswd
 ```
 
 ---
@@ -130,11 +131,16 @@ The Dockerfile uses a multi-stage build to pull the Docker CLI binary from
 anything from the host filesystem. The docker binary in `docker:cli` is statically
 linked (Alpine/musl) and runs on any Linux.
 
+Dependencies are installed via `uv sync` into `.venv/` during the build step.
+At runtime the container starts `uvicorn` directly from `.venv/bin/uvicorn` to avoid
+the package-sync delay that `uv run` introduces.
+
 ```
 FROM python:3.13-slim
   ├─ COPY --from=docker:cli       → /usr/local/bin/docker
   │                                  /usr/local/libexec/docker/cli-plugins/docker-compose
   ├─ COPY --from=ghcr.io/.../uv  → /usr/local/bin/uv
-  ├─ COPY pyproject.toml uv.lock → uv sync (install deps)
-  └─ COPY lib/ cli/ api.py
+  ├─ COPY pyproject.toml uv.lock → uv sync (install deps into .venv/)
+  ├─ COPY lib/ cli/ api.py
+  └─ CMD [".venv/bin/uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
 ```

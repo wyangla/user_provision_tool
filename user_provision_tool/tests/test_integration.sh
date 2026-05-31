@@ -137,10 +137,14 @@ mkdir -p \
     "$PROVISION_DIR/generated" \
     "$PROVISION_DIR/templates" \
     "$PROVISION_DIR/user-data/testuser/app" \
-    "$PROVISION_DIR/user-data/testuser/db"
+    "$PROVISION_DIR/user-data/testuser/db" \
+    "$PROVISION_DIR/user-data/fileuser/html" \
+    "$PROVISION_DIR/user-data/fileuser/db"
 
 cp "$SCRIPT_DIR/fixtures/docker-compose.template.yml.j2" "$PROVISION_DIR/templates/"
 cp "$SCRIPT_DIR/fixtures/myapp.template.nginx.conf.j2"  "$PROVISION_DIR/templates/" 2>/dev/null || true
+cp "$SCRIPT_DIR/fixtures/docker-compose.plain.yml"      "$PROVISION_DIR/templates/" 2>/dev/null || true
+cp "$SCRIPT_DIR/fixtures/myapp.plain.nginx.conf"        "$PROVISION_DIR/templates/" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # Teardown function
@@ -414,6 +418,66 @@ if [ "$net_exists" -eq 0 ]; then
     pass "Network $TEST_NETWORK_NAME is removed after de-registration"
 else
     fail "Network $TEST_NETWORK_NAME still exists after de-registration"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 13: POST /users with compose_file_path (plain file — auto-converted)
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 13: POST /users with compose_file_path (auto-conversion) ---"
+REGISTER_BODY_FC=$(cat <<EOF
+{
+  "user_name": "fileuser",
+  "service_name": "myapp",
+  "compose_file_path": "${PROVISION_DIR}/templates/docker-compose.plain.yml",
+  "label": "0",
+  "domain": "localhost",
+  "passwd": "",
+  "volumes": {
+    "html": "${PROVISION_DIR}/user-data/fileuser/html",
+    "db":   "${PROVISION_DIR}/user-data/fileuser/db"
+  }
+}
+EOF
+)
+fc_resp=$(curl -sf -X POST "$API_URL/users" \
+    -H "Content-Type: application/json" \
+    -d "$REGISTER_BODY_FC")
+fc_status=$(echo "$fc_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
+if [ "$fc_status" = "registered" ]; then
+    pass "POST /users with compose_file_path registered fileuser/myapp/0"
+else
+    fail "POST /users with compose_file_path failed: $fc_resp"
+fi
+# Clean up fileuser so it doesn't affect subsequent runs
+curl -sf -X DELETE "$API_URL/users/fileuser/services/myapp/0" >/dev/null 2>&1 || true
+
+# ---------------------------------------------------------------------------
+# Test 14: POST /users with neither compose source returns 422
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 14: POST /users with no compose source (expect 422) ---"
+no_src_http=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_URL/users" \
+    -H "Content-Type: application/json" \
+    -d '{"user_name":"x","service_name":"y"}')
+if [ "$no_src_http" = "422" ]; then
+    pass "POST /users with no compose source returns 422"
+else
+    fail "Expected 422 when no compose source provided, got: $no_src_http"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 15: POST /users with both compose_template_path and compose_file_path returns 422
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 15: POST /users with both compose sources (expect 422) ---"
+both_src_http=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_URL/users" \
+    -H "Content-Type: application/json" \
+    -d "{\"user_name\":\"x\",\"service_name\":\"y\",\"compose_template_path\":\"a\",\"compose_file_path\":\"b\"}")
+if [ "$both_src_http" = "422" ]; then
+    pass "POST /users with both compose sources returns 422"
+else
+    fail "Expected 422 when both compose sources provided, got: $both_src_http"
 fi
 
 # ---------------------------------------------------------------------------

@@ -69,15 +69,19 @@ Liveness probe — does not touch Docker.
     "user_name": "alice",
     "service_name": "myapp",
     "label": "0",
-    "compose_file_path": "/srv/provision/generated/docker-compose.user-alice.0.yml",
+    "compose_file_path": "/srv/provision/source_projects/myapp/docker-compose.user-alice.0.yml",
     "nginx_conf_path": null,
     "htpasswd_path": null,
-    "env_file_path": "/srv/provision/templates/myapp.env",
+    "env_file_path": "/srv/provision/source_projects/myapp/myapp.env",
     "volumes": { "app_data": "/srv/provision/user-data/alice/app" }
   },
   "volume_warnings": { "missing": [], "extra": [] }
 }
 ```
+
+> **Output locations**: the rendered compose file is written into the same directory as the
+> `compose_template_path` (the source project root), so that `build: .` references resolve
+> correctly. Nginx conf and `.htpasswd` files are written into `GENERATED_DIR`.
 
 **Error codes**
 
@@ -192,6 +196,6 @@ A service is **missing** when its compose file does not exist (e.g. was deleted 
 
 | Variable | Default | Description |
 |---|---|---|
-| `GENERATED_DIR` | `./generated` | Directory for rendered compose/nginx/htpasswd files |
+| `GENERATED_DIR` | `./generated` | Directory for nginx conf, htpasswd, and `user_registry.yml` |
 | `REGISTRY_FILE` | `./user_registry.yml` | Path to the registry state file |
 | `PROVISION_API_PORT` | `8765` | Host port (set in `docker-compose.provision.yml`) |

@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from lib import docker_ops, registry, validation
+from lib import provisioner, validation
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,36 +35,23 @@ def main() -> None:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 
-    entry = registry.get_user_service(args.user_name, args.service_name, args.label)
-    if not entry:
-        print(
-            f"ERROR: No registration found for user '{args.user_name}', "
-            f"service '{args.service_name}', label '{args.label}'.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    compose_file = entry.get("compose_file_path", "")
-    if not compose_file or not Path(compose_file).exists():
-        print(f"ERROR: Compose file not found: '{compose_file}'.", file=sys.stderr)
-        sys.exit(1)
-
     cache_flag = " --no-cache" if args.no_cache else ""
-    print(f"[1/2] Building containers{cache_flag}: {compose_file}")
-    env_file = entry.get("env_file_path") or None
+    print(f"[1/2] Building containers{cache_flag}...")
     try:
-        docker_ops.compose_build(compose_file, no_cache=args.no_cache, env_file=env_file)
-    except RuntimeError as e:
-        print(f"ERROR during build: {e}", file=sys.stderr)
+        provisioner.rebuild_user(
+            user_name=args.user_name,
+            service_name=args.service_name,
+            label=args.label,
+            no_cache=args.no_cache,
+        )
+    except KeyError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
+    except (FileNotFoundError, RuntimeError) as e:
+        print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"[2/2] Starting containers: {compose_file}")
-    try:
-        docker_ops.compose_up(compose_file, env_file=env_file)
-    except RuntimeError as e:
-        print(f"ERROR during up: {e}", file=sys.stderr)
-        sys.exit(1)
-
+    print(f"[2/2] Started containers.")
     print(f"\nDone. Containers rebuilt and started for user '{args.user_name}'.")
 
 
