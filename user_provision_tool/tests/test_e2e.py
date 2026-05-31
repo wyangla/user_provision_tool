@@ -277,6 +277,32 @@ class TestE2ERegistration:
         e_bob = reg_mod.get_user_service("bob", "myapp", "1")
         assert e_alice["network_name"] != e_bob["network_name"]
 
+    def test_auto_volumes_created_when_no_v_flag(self, mock_docker, monkeypatch, tmp_path):
+        """Registering without -v auto-creates volume dirs under USER_DATA_DIR."""
+        import shutil
+        import cli.register as reg_script
+        compose_tpl = "docker-compose.template.yml.j2"
+        shutil.copy(FIXTURES_DIR / compose_tpl, tmp_path / compose_tpl)
+        monkeypatch.setattr("getpass.getpass", lambda prompt="": "")
+        user_data = tmp_path / "user_data"
+        monkeypatch.setattr("cli.register.USER_DATA_DIR", user_data)
+        sys_argv = [
+            "cli/register.py",
+            "-u", "frank", "-sn", "myapp",
+            "-pr", str(tmp_path),
+            "-tc", compose_tpl, "-l", "0",
+            # no -v flags — auto-generation under USER_DATA_DIR
+        ]
+        with patch.object(sys, "argv", sys_argv):
+            reg_script.main()
+        entry = reg_mod.get_user_service("frank", "myapp", "0")
+        assert entry is not None
+        base = user_data / "frank" / "myapp" / "0"
+        assert (base / "app_data").is_dir()
+        assert (base / "db_data").is_dir()
+        assert entry["volumes"]["app_data"] == str(base / "app_data")
+        assert entry["volumes"]["db_data"] == str(base / "db_data")
+
 
 # ---------------------------------------------------------------------------
 # E2E: Removal

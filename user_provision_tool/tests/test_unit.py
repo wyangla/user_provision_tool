@@ -640,3 +640,43 @@ class TestNginxConverter:
         assert "{{ hostname }}" in header
         assert "{{ container_prefix }}" in header
         assert "{{ htpasswd_path }}" in header
+
+
+# ---------------------------------------------------------------------------
+# provisioner
+# ---------------------------------------------------------------------------
+
+
+class TestProvisioner:
+    """Unit tests for lib/provisioner helper functions."""
+
+    def test_auto_volumes_creates_directories(self, tmp_path):
+        """_auto_volumes creates a subdirectory for each volume key."""
+        from lib.provisioner import _auto_volumes
+        result = _auto_volumes(COMPOSE_TEMPLATE, "alice", "myapp", "0", tmp_path / "ud")
+        for key, path in result.items():
+            assert Path(path).is_dir(), f"Expected dir for volume '{key}': {path}"
+
+    def test_auto_volumes_paths_rooted_at_user_data_dir(self, tmp_path):
+        """Returned paths sit under user_data_dir/{user}/{service}/{label}/{key}."""
+        from lib.provisioner import _auto_volumes
+        user_data = tmp_path / "user_data"
+        result = _auto_volumes(COMPOSE_TEMPLATE, "alice", "myapp", "0", user_data)
+        base = user_data / "alice" / "myapp" / "0"
+        for key, path in result.items():
+            assert path == str(base / key)
+
+    def test_auto_volumes_detects_jinja2_dict_keys(self, tmp_path):
+        """Keys referenced via {{ volumes['key'] }} in the template are detected."""
+        from lib.provisioner import _auto_volumes
+        result = _auto_volumes(COMPOSE_TEMPLATE, "alice", "myapp", "0", tmp_path)
+        # Fixture template uses {{ volumes['app_data'] }} and {{ volumes['db_data'] }}
+        assert "app_data" in result
+        assert "db_data" in result
+
+    def test_auto_volumes_idempotent(self, tmp_path):
+        """Calling _auto_volumes twice for the same user does not raise."""
+        from lib.provisioner import _auto_volumes
+        user_data = tmp_path / "user_data"
+        _auto_volumes(COMPOSE_TEMPLATE, "alice", "myapp", "0", user_data)
+        _auto_volumes(COMPOSE_TEMPLATE, "alice", "myapp", "0", user_data)  # must not raise
