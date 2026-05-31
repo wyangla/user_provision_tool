@@ -144,10 +144,15 @@ Dependencies are installed via `uv sync` into `.venv/` during the build step.
 At runtime the container starts `uvicorn` directly from `.venv/bin/uvicorn` to avoid
 the package-sync delay that `uv run` introduces.
 
+The `docker-buildx` plugin is copied alongside `docker-compose` because Docker
+29+ requires it when BuildKit is the active builder. Without it, `docker build`
+(and `docker compose build`) would fail inside the container.
+
 ```
 FROM python:3.13-slim
   ├─ COPY --from=docker:cli       → /usr/local/bin/docker
   │                                  /usr/local/libexec/docker/cli-plugins/docker-compose
+  │                                  /usr/local/libexec/docker/cli-plugins/docker-buildx
   ├─ COPY --from=ghcr.io/.../uv  → /usr/local/bin/uv
   ├─ COPY pyproject.toml uv.lock → uv sync (install deps into .venv/)
   ├─ COPY lib/ cli/ api.py

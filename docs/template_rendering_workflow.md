@@ -26,6 +26,8 @@ source_project/service_1/          ← project root (-pr)
 │                           • strip name:                     │  │  server_name           literal → {{ hostname }}             │
 │                           • strip ports:                    │  │  auth_basic            literal → {{ service_name }} -       │
 │                           • container_name → JINJA2TOKxxx   │  │                                   {{ user_name }}           │
+│                           • strip profiles: (per service)   │  │                                                             │
+│                           • exclude named-profile services  │  │                                                             │
 │                           • bind sources  → JINJA2TOKxxx    │  │  auth_basic_user_file  path    → {{ htpasswd_path }}        │
 │                           • networks      → JINJA2TOKxxx    │  │  proxy_pass            myapp-X → {{ container_prefix }}X   │
 │                           • named volumes → JINJA2TOKxxx    │  │           (only host prefixed with service name hint)      │
@@ -127,9 +129,14 @@ source_project/service_1/          ← project root (-pr)
 │ [4/5]  docker_ops.compose_up()                              │
 │                                                             │
 │  docker compose -f /pr/docker-compose.user-alice.0.yml      │
+│                 --project-name myapp-user_alice-0            │
 │                 --env-file /pr/.env                          │
 │                 up -d                                        │
 │                                                             │
+│  --project-name = network_name; prevents Compose from using  │
+│  the source dir name as the project (which would cause all   │
+│  users to share a project and tear down each other's         │
+│  containers)                                                 │
 │  full path passed; compose resolves build: . from there     │
 │  --env-file is the copy placed next to the compose file     │
 │  ${ENV_VAR} resolved here from --env-file at runtime        │

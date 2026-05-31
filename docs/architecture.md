@@ -42,8 +42,8 @@ user_provision_tool/
 │
 └── tests/
     ├── conftest.py                # Shared pytest fixtures
-    ├── test_unit.py               # Unit tests (81)
-    ├── test_e2e.py                # End-to-end pytest tests (31)
+    ├── test_unit.py               # Unit tests (88)
+    ├── test_e2e.py                # End-to-end pytest tests (32)
     ├── test_integration.sh        # Full Docker integration test (17)
     └── fixtures/
         ├── docker-compose.template.yml.j2
@@ -62,9 +62,9 @@ user_provision_tool/
 | `registry.py` | Load/save `user_registry.yml`; add/remove/query entries by user+service+label |
 | `template_engine.py` | Extract template volumes; render compose and nginx files via Jinja2; copy `.env` alongside output |
 | `auth.py` | `getpass` prompt; bcrypt hash via `passlib.hash.bcrypt`; write `.htpasswd` file |
-| `docker_ops.py` | `compose_up`, `compose_down`, `compose_build`, `docker_ps` wrappers; optional `--env-file` flag |
+| `docker_ops.py` | `compose_up`, `compose_down`, `compose_build`, `docker_ps` wrappers; `--env-file` and `--project-name` flags; `DOCKER_BUILDKIT=1` set in subprocess env |
 | `provisioner.py` | Shared workflow for register/remove/rebuild; both `api.py` and `cli/` delegate here |
-| `compose_converter.py` | Parse a plain `docker-compose.yml` and emit a Jinja2 `.yml.j2` template |
+| `compose_converter.py` | Parse a plain `docker-compose.yml` and emit a Jinja2 `.yml.j2` template; services with named profiles are excluded; `profiles:` key is stripped from kept services |
 | `nginx_converter.py` | Apply regex substitutions to a plain nginx conf and emit a `.j2` template |
 
 ---
@@ -109,7 +109,7 @@ Input: user_name, service_name, label, volumes, passwd, template paths, env_file
   │       │       └─ written into GENERATED_DIR
   │       │       └─ auth.py ── write .htpasswd into GENERATED_DIR
   │       │
-  │       ├─ docker_ops.py ── docker compose -f <compose> [--env-file <env>] up -d
+  │       ├─ docker_ops.py ── docker compose -f <compose> --project-name <network_name> [--env-file <env>] up -d
   │       │
   │       └─ docker_ops.py ── network_connect + nginx_reload
   │
@@ -124,7 +124,7 @@ Input: user_name, service_name, label
   │
   ├─ registry.py ── look up compose_file_path + env_file_path
   │
-  ├─ docker_ops.py ── docker compose down
+  ├─ docker_ops.py ── docker compose --project-name <network_name> down
   │
   └─ registry.py ── remove entry from user_registry.yml
 ```
@@ -136,9 +136,9 @@ Input: user_name, service_name, label
   │
   ├─ registry.py ── look up compose_file_path + env_file_path
   │
-  ├─ docker_ops.py ── docker compose build
+  ├─ docker_ops.py ── docker compose --project-name <network_name> build
   │
-  └─ docker_ops.py ── docker compose up -d
+  └─ docker_ops.py ── docker compose --project-name <network_name> up -d
 ```
 
 ---
@@ -165,6 +165,8 @@ Input: user_name, service_name, label
 5. **Same-path bind mount** — `${PROVISION_DIR}:${PROVISION_DIR}` ensures the absolute paths written into generated compose files are valid on the host where the Docker daemon runs.
 6. **`passlib.hash.bcrypt`** — passwords are hashed with `bcrypt.using(rounds=12).hash()`; hashes are stored in `user_registry.yml` and written into `.htpasswd` files for nginx basic auth.
 7. **`user_registry.yml` as source of truth** — `cli/status.py` and `GET /users` cross-reference live `docker ps` output against registry entries to compute per-service health.
+8. **Docker Compose project isolation** — every `compose_up`, `compose_down`, and `compose_build` call passes `--project-name {network_name}`. Because all rendered compose files share the same source directory, omitting this would cause Compose to infer the same project name for all users and tear down one user's containers when starting another's.
+9. **BuildKit enabled in subprocesses** — all `docker` subprocess calls inherit `DOCKER_BUILDKIT=1` from `os.environ`. This is required for Docker 29+ (where BuildKit is the default builder) and enables `--mount=type=cache` and other BuildKit Dockerfile features.
 
 ---
 

@@ -164,6 +164,7 @@ The converters apply these substitutions:
 | network names | `→ {{ network_name }}` |
 | named volume keys | `→ {{ volumes['key'] }}` |
 | `name:` and `ports:` | stripped |
+| `profiles:` | stripped from kept services; services with any non-empty profile string are excluded entirely |
 
 | Directive (nginx) | Transformation |
 |---|---|

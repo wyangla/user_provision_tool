@@ -7,10 +7,10 @@ Integration (bash)   tests/test_integration.sh     17 tests
   └─ full Docker round-trip: build image → start API → register → rebuild → remove
     also covers -fc / -fn plain-file conversion via the API
 
-E2E (pytest)         tests/test_e2e.py              31 tests
+E2E (pytest)         tests/test_e2e.py              32 tests
   └─ exercise CLI scripts end-to-end against real files, no Docker
 
-Unit (pytest)        tests/test_unit.py             81 tests
+Unit (pytest)        tests/test_unit.py             88 tests
   └─ individual lib/ functions in isolation, all I/O mocked
 ```
 
@@ -30,7 +30,7 @@ Notable patterns:
 - `registry` tests use the `registry_file` fixture (monkeypatched temp file).
 - `docker_ops` tests mock `subprocess.run` to avoid real Docker calls.
 - `template_engine` tests render against fixture templates in `tests/fixtures/`.
-- `TestComposeConverter` covers container_name rewriting, volume extraction, network substitution.
+- `TestComposeConverter` covers container_name rewriting, volume extraction, network substitution, profile filtering (strips `profiles:`, excludes named-profile services).
 - `TestNginxConverter` covers server_name, auth_basic, proxy_pass, and htpasswd_path substitutions.
 
 ---
@@ -112,7 +112,7 @@ uv sync
 python -m pytest tests/test_unit.py tests/test_e2e.py -v
 ```
 
-Expected: **112 passed** (81 unit + 31 e2e).
+Expected: **120 passed** (88 unit + 32 e2e).
 
 ---
 
