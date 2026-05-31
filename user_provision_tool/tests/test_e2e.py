@@ -209,7 +209,7 @@ class TestE2ERegistration:
         assert exc.value.code != 0
 
     def test_volume_mismatch_abort(self, mock_docker, monkeypatch, tmp_path):
-        """When volumes don't match and user types 'n', registration aborts."""
+        """When wrong volume keys are provided and user types 'n', registration aborts."""
         import shutil
         import cli.register as reg_script
         compose_tpl = "docker-compose.template.yml.j2"
@@ -221,7 +221,7 @@ class TestE2ERegistration:
             "-u", "carol", "-sn", "myapp",
             "-pr", str(tmp_path),
             "-tc", compose_tpl, "-l", "0",
-            # intentionally omit volumes to trigger the mismatch warning
+            "-v", "wrong_key=/some/path",  # key not in template → mismatch warning
         ]
         with patch.object(sys, "argv", sys_argv):
             with pytest.raises(SystemExit) as exc:

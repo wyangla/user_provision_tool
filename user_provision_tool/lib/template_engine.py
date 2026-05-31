@@ -15,6 +15,7 @@ should use the container_prefix so inter-service communication works by generate
 
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -55,10 +56,26 @@ class _PathPlaceholderUndefined(Undefined):
 
 
 def extract_template_volumes(compose_template_path: str) -> list[str]:
-    """Parse the volumes: section of a compose template and return list of volume keys."""
+    """Return the list of volume keys referenced in a compose template.
+
+    Three sources are scanned and merged (in order, de-duplicated):
+    1. ``{{ volumes['key'] }}`` / ``{{ volumes["key"] }}`` Jinja2 expressions
+       — covers bind-mount sources substituted at render time.
+    2. Top-level named ``volumes:`` block — covers named Docker volumes.
+    3. Plain (non-Jinja2) bind-mount source paths in service volumes lists.
+    """
     with open(compose_template_path) as f:
         content = f.read()
-    # Render with placeholder values so Jinja2 doesn't choke and YAML stays valid
+
+    # --- 1. Jinja2 dict-access patterns: {{ volumes['key'] }} or {{ volumes["key"] }} ---
+    _JINJA_VOL_RE = re.compile(r'\{\{-?\s*volumes\[[\'"]([^\'"]+)[\'"]\]\s*-?\}\}')
+    jinja_keys: list[str] = []
+    for m in _JINJA_VOL_RE.finditer(content):
+        key = m.group(1)
+        if key not in jinja_keys:
+            jinja_keys.append(key)
+
+    # --- 2 & 3. Render with placeholder values and parse the YAML ---
     try:
         env = Environment(undefined=_PathPlaceholderUndefined)
         rendered = env.from_string(content).render()
@@ -83,7 +100,15 @@ def extract_template_volumes(compose_template_path: str) -> list[str]:
                 src = v.get("source", "")
                 if src and not src.startswith("/") and src not in top_volumes:
                     service_volumes.append(src)
-    return top_volumes + service_volumes
+
+    # Merge all three sources, preserving order and de-duplicating
+    seen: set[str] = set()
+    result: list[str] = []
+    for key in jinja_keys + top_volumes + service_volumes:
+        if key not in seen:
+            seen.add(key)
+            result.append(key)
+    return result
 
 
 def render_compose(

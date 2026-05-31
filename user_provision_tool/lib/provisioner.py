@@ -18,6 +18,30 @@ from . import auth, docker_ops, registry, template_engine
 _registry_lock = threading.Lock()
 
 
+def _auto_volumes(
+    compose_template: str,
+    user_name: str,
+    service_name: str,
+    label: str,
+    user_data_dir: Path,
+) -> dict[str, str]:
+    """Create per-volume host directories and return the volume → host-path mapping.
+
+    Directories are created at:
+        ``{user_data_dir}/{user_name}/{service_name}/{label}/{volume_key}/``
+
+    The returned dict can be passed directly to ``register_user`` as ``volumes``.
+    """
+    keys = template_engine.extract_template_volumes(compose_template)
+    base = user_data_dir / user_name / service_name / label
+    result: dict[str, str] = {}
+    for key in keys:
+        vol_dir = base / key
+        vol_dir.mkdir(parents=True, exist_ok=True)
+        result[key] = str(vol_dir)
+    return result
+
+
 def register_user(
     *,
     user_name: str,
@@ -25,13 +49,14 @@ def register_user(
     label: str,
     compose_template: str,
     output_dir: str | Path,
-    volumes: dict[str, str],
+    volumes: dict[str, str] | None = None,
     passwd: str = "",
     nginx_template: str | None = None,
     domain: str = "localhost",
     env_file: str | None = None,
     nginx_container: str = "provision-nginx",
     nginx_output_dir: str | Path | None = None,
+    user_data_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Register a user and start their service containers.
 
@@ -55,6 +80,11 @@ def register_user(
     nginx_output_dir:
         Directory where nginx conf and htpasswd files are written.  Defaults
         to ``output_dir`` when not provided.
+    user_data_dir:
+        When provided and *volumes* is ``None`` or empty, host directories are
+        automatically created under ``{user_data_dir}/{user_name}/{service_name}/{label}/{vol_key}/``
+        and the resulting mapping is used as the volume dict.  When *volumes*
+        is explicitly supplied it takes precedence over this parameter.
     passwd:
         Plain-text password.  Empty string → no htpasswd file written.
     nginx_container:
@@ -78,6 +108,16 @@ def register_user(
     output_dir.mkdir(parents=True, exist_ok=True)
     nginx_dir = Path(nginx_output_dir) if nginx_output_dir else output_dir
     nginx_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- Auto-generate volumes if not supplied ---
+    if not volumes:
+        if user_data_dir:
+            volumes = _auto_volumes(
+                compose_template, user_name, service_name, label,
+                Path(user_data_dir),
+            )
+        else:
+            volumes = {}
 
     # --- Volume cross-check (informational; callers decide how to surface) ---
     expected_vols = template_engine.extract_template_volumes(compose_template)

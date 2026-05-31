@@ -62,7 +62,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock   # Docker socket
       - ${PROVISION_DIR}:${PROVISION_DIR}            # same-path bind mount
     environment:
-      - GENERATED_DIR=${PROVISION_DIR}/generated     # where rendered files go
+      - GENERATED_DIR=${PROVISION_DIR}/generated     # nginx conf, htpasswd, registry
+      - USER_DATA_DIR=${PROVISION_DIR}/user_data      # auto-created per-user volume dirs
       - REGISTRY_FILE=${PROVISION_DIR}/generated/user_registry.yml
     restart: unless-stopped
 ```
@@ -77,7 +78,7 @@ export PROVISION_DIR=/srv/provision
 export PROVISION_API_PORT=8765
 
 # 2. Create the provision directory structure
-mkdir -p $PROVISION_DIR/generated $PROVISION_DIR/source_projects
+mkdir -p $PROVISION_DIR/generated $PROVISION_DIR/source_projects $PROVISION_DIR/user_data
 
 # 3. Start (builds image on first run)
 docker compose -f docker-compose.provision.yml up -d --build
@@ -103,6 +104,13 @@ PROVISION_DIR/
 │       ├── myapp.nginx.conf.j2            ← nginx template   (you provide)
 │       ├── myapp.env                      ← runtime secrets   (you provide)
 │       └── docker-compose.user-alice.0.yml ← rendered per-user compose (written by tool)
+│
+├── user_data/                    ← per-user volume directories (auto-created by tool)
+│   └── alice/
+│       └── myapp/
+│           └── 0/
+│               ├── app_data/
+│               └── db_data/
 │
 └── generated/                    ← written by provision-api
     ├── user_registry.yml

@@ -38,6 +38,13 @@ GENERATED_DIR = Path(
 )
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
+# User volume data root: auto-created subdirectories are used when no volumes
+# are explicitly provided at registration time.
+USER_DATA_DIR = Path(
+    os.environ.get("USER_DATA_DIR", str(GENERATED_DIR.parent / "user_data"))
+)
+USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
 NGINX_CONTAINER = os.environ.get("NGINX_CONTAINER", "provision-nginx")
 
 # The registry module reads REGISTRY_FILE from its own env var at import time.
@@ -171,7 +178,8 @@ def register_user(req: RegisterRequest) -> dict[str, Any]:
             compose_template=compose_template,
             output_dir=Path(compose_template).parent,
             nginx_output_dir=GENERATED_DIR,
-            volumes=req.volumes,
+            volumes=req.volumes or None,
+            user_data_dir=USER_DATA_DIR,
             passwd=req.passwd,
             nginx_template=nginx_template,
             domain=req.domain,

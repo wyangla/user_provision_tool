@@ -165,10 +165,10 @@ class TestTemplateEngine:
 
     def test_extract_template_volumes_bind_mounts(self):
         vols = template_engine.extract_template_volumes(COMPOSE_TEMPLATE)
-        # app_data and db_data are used as {{ volumes['...'] }} — they won't appear
-        # as raw keys because they're inside Jinja2 expressions; that's expected behaviour.
-        # The extraction covers static named volumes (top-level) and plain string bind mounts.
-        assert isinstance(vols, list)
+        # app_data and db_data are referenced via {{ volumes['app_data'] }} /
+        # {{ volumes['db_data'] }} Jinja2 expressions and are now detected.
+        assert "app_data" in vols
+        assert "db_data" in vols
 
     def test_render_compose(self, tmp_path):
         out = str(tmp_path / "docker-compose.user-alice.0.yml")

@@ -9,6 +9,7 @@ services:
       - ${PROVISION_DIR}:${PROVISION_DIR}
     environment:
       - GENERATED_DIR=${PROVISION_DIR}/generated
+      - USER_DATA_DIR=${PROVISION_DIR}/user_data
       - REGISTRY_FILE=${PROVISION_DIR}/generated/user_registry.yml
       - NGINX_CONTAINER=provision-nginx
     restart: unless-stopped

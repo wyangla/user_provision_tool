@@ -41,6 +41,10 @@ GENERATED_DIR = Path(
     os.environ.get("GENERATED_DIR", str(Path(__file__).parent.parent / "generated"))
 )
 
+USER_DATA_DIR = Path(
+    os.environ.get("USER_DATA_DIR", str(Path(__file__).parent.parent / "user_data"))
+)
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Register a user and start their service containers.")
@@ -66,7 +70,10 @@ def parse_args() -> argparse.Namespace:
 
     p.add_argument("-v", "--volume", action="append", default=[],
         metavar="KEY=VALUE",
-        help="Volume mapping (can be repeated): template_volume=host_path",
+        help=(
+            "Volume mapping (can be repeated): template_volume=host_path. "
+            "When omitted, paths are auto-generated under USER_DATA_DIR."
+        ),
     )
     p.add_argument("-e", "--env-file", default=None, help="Path to .env file for docker compose variable substitution")
 
@@ -192,9 +199,12 @@ def main() -> None:
         nginx_template = template_out
         print(f"[0/4] Converted nginx file to template: {nginx_template}")
 
-    # --- Volume validation (interactive) ---
+    # --- Volume validation / auto-generation ---
     volumes = parse_volumes(args.volume)
-    volumes = check_volumes(compose_template, volumes)
+    if volumes:
+        # Manual mode: validate provided mapping against template
+        volumes = check_volumes(compose_template, volumes)
+    # else: provisioner will auto-generate under USER_DATA_DIR
 
     # --- Password prompt ---
     try:
@@ -212,7 +222,8 @@ def main() -> None:
             compose_template=compose_template,
             output_dir=project_root,
             nginx_output_dir=GENERATED_DIR,
-            volumes=volumes,
+            volumes=volumes or None,
+            user_data_dir=USER_DATA_DIR,
             passwd=passwd,
             nginx_template=nginx_template,
             domain=args.domain,
