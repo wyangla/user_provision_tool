@@ -45,6 +45,12 @@ USER_DATA_DIR = Path(
 )
 USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+# Source projects root: operators clone / copy service repos here.
+SOURCE_PROJECTS_DIR = Path(
+    os.environ.get("SOURCE_PROJECTS_DIR", str(GENERATED_DIR.parent / "source_projects"))
+)
+SOURCE_PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+
 NGINX_CONTAINER = os.environ.get("NGINX_CONTAINER", "provision-nginx")
 
 # The registry module reads REGISTRY_FILE from its own env var at import time.

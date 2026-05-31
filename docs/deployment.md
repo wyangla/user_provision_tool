@@ -62,8 +62,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock   # Docker socket
       - ${PROVISION_DIR}:${PROVISION_DIR}            # same-path bind mount
     environment:
-      - GENERATED_DIR=${PROVISION_DIR}/generated     # nginx conf, htpasswd, registry
-      - USER_DATA_DIR=${PROVISION_DIR}/user_data      # auto-created per-user volume dirs
+      - GENERATED_DIR=${PROVISION_DIR}/generated        # nginx conf, htpasswd, registry
+      - USER_DATA_DIR=${PROVISION_DIR}/user_data         # auto-created per-user volume dirs
+      - SOURCE_PROJECTS_DIR=${PROVISION_DIR}/source_projects  # operator repo drop zone
       - REGISTRY_FILE=${PROVISION_DIR}/generated/user_registry.yml
     restart: unless-stopped
 ```
