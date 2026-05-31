@@ -149,7 +149,8 @@ def render_compose(
     copied_env: str | None = None
     if env_file and Path(env_file).is_file():
         dest = Path(output_path).parent / Path(env_file).name
-        shutil.copy2(env_file, dest)
+        if Path(env_file).resolve() != dest.resolve():
+            shutil.copy2(env_file, dest)
         copied_env = str(dest)
     return copied_env
 

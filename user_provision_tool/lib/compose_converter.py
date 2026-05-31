@@ -38,6 +38,10 @@ Transformations applied
 
 7. Docker Compose ${ENV_VAR} substitutions are left intact for runtime
    resolution via --env-file.
+
+8. Strip `profiles:` from every service.
+   Profile selection is a deployment-level concern; every rendered user compose
+   must unconditionally start all its services via `docker compose up`.
 """
 
 from __future__ import annotations
@@ -169,6 +173,8 @@ def _transform_service(
             continue  # replaced below
         if key == "ports":
             continue  # stripped — use provision-nginx for all ingress
+        if key == "profiles":
+            continue  # stripped — profile selection is a deployment detail, not per-user
         result[key] = value
         if key == "image" and not inserted:
             result["container_name"] = container_name_val
@@ -240,11 +246,26 @@ def convert(data: dict) -> tuple[dict, dict[str, str], _TokenRegistry]:
         key = _unique_key(Path(src).name or src, used_keys)
         src_to_key[src] = key
 
-    # 3. Transform each service
+    # 3. Transform each service (skip services locked to a named profile)
+    def _is_default_service(svc: dict) -> bool:
+        """Return True if the service runs without explicit profile activation.
+
+        Services with no ``profiles`` key are always started.
+        Services with ``profiles: [""]`` use an empty-string profile as a
+        convention to mark them as the default variant — treated the same way.
+        Services with any non-empty profile string are deployment-variant
+        services (e.g. ``profiles: ["falkordb"]``) and should not be included
+        in a provisioned user compose.
+        """
+        profiles = svc.get("profiles")
+        if not profiles:            # no key, or empty list
+            return True
+        return all(p == "" for p in profiles)
+
     result["services"] = {
         svc_key: _transform_service(svc_key, svc, src_to_key, tokens)
         for svc_key, svc in services.items()
-        if isinstance(svc, dict)
+        if isinstance(svc, dict) and _is_default_service(svc)
     }
 
     # 4. Rewrite top-level networks to isolated per-user network

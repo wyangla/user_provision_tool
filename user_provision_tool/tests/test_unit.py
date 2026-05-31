@@ -438,6 +438,30 @@ class TestComposeConverter:
         transformed, _, _ = convert(self._sample_data())
         assert "ports" not in transformed["services"]["web"]
 
+    def test_convert_strips_profiles(self):
+        """A service whose only profile is \"\" is kept with profiles key removed."""
+        from lib.compose_converter import convert
+        data = self._sample_data()
+        data["services"]["db"]["profiles"] = [""]
+        transformed, _, _ = convert(data)
+        assert "db" in transformed["services"]
+        assert "profiles" not in transformed["services"]["db"]
+
+    def test_convert_excludes_named_profile_services(self):
+        from lib.compose_converter import convert
+        data = self._sample_data()
+        data["services"]["web"]["profiles"] = ["falkordb"]
+        transformed, _, _ = convert(data)
+        assert "web" not in transformed["services"]
+
+    def test_convert_keeps_empty_string_profile_services(self):
+        from lib.compose_converter import convert
+        data = self._sample_data()
+        data["services"]["web"]["profiles"] = [""]
+        transformed, _, _ = convert(data)
+        assert "web" in transformed["services"]
+        assert "profiles" not in transformed["services"]["web"]
+
     def test_convert_sets_container_name_template(self):
         text, _ = self._convert_to_text(self._sample_data())
         assert "{{ container_prefix }}web" in text

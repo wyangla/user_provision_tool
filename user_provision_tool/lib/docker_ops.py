@@ -6,13 +6,17 @@ Inside the deployed container, docker socket access is granted directly
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 
 
 def _run(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
     print(f"+ {' '.join(args)}", flush=True)
-    result = subprocess.run(args, text=True, capture_output=False)
+    # Enable BuildKit so Dockerfiles using --mount=type=cache and other
+    # BuildKit features work correctly.
+    env = {**os.environ, "DOCKER_BUILDKIT": "1"}
+    result = subprocess.run(args, text=True, capture_output=False, env=env)
     if check and result.returncode != 0:
         raise RuntimeError(
             f"Command failed (exit {result.returncode}): {' '.join(args)}"
