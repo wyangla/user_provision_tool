@@ -42,6 +42,29 @@ flowchart LR
     style route   fill:#dbeafe,stroke:#3b82f6
 ```
 
+### What it is
+
+A **provisioner**: given a Docker Compose stack, it stamps out one isolated, routed copy per user — on a single Docker host — via a single API call.
+
+- **Your users are tenants**, not operators. They never touch Docker or the server.
+- **Your service is a compose file** you already have. No rewrite into k8s manifests or job specs.
+- **Your host is one machine.** You want simplicity, not a cluster.
+
+### What it is not
+
+- Not a multi-node scheduler — all containers run on the same host
+- Not a general-purpose PaaS — it does one thing: provision and tear down per-user stacks
+
+### How it compares
+
+| Tool | Target user | Single-call tenant provisioning | Built-in routing | Multi-node | Complexity |
+|---|---|---|---|---|---|
+| **user_provision_tool** | Your end-customers / tenants | ✅ | ✅ nginx — per-user-service conf, hot-reloaded | ❌ single host | low |
+| **Coolify** | Developers / operators | ❌ operator-scoped | ✅ Traefik or Caddy via Docker labels | ❌ single host | low |
+| **Docker Swarm** | Operators | ❌ you script it | ❌ none built-in | ✅ | medium |
+| **Nomad** | Operators | ❌ you script it | ❌ needs Consul Connect | ✅ | medium |
+| **Kubernetes** | Operators | ❌ you script it | ✅ ingress controllers | ✅ | high |
+
 ---
 
 ## Quick Start (API)
