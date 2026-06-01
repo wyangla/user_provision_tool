@@ -36,6 +36,7 @@
 - The provision-api container does **not** run a Docker daemon — it uses the host daemon via the socket.
 - The `PROVISION_DIR` bind mount uses the same path on both sides (`${PROVISION_DIR}:${PROVISION_DIR}`) so absolute paths in generated compose files are valid on the host.
 - User containers are started as siblings of the provision-api container, not children.
+- `provision-nginx` is the shared ingress router. It runs as a sibling container and is dynamically connected to each user's isolated Docker network after registration so it can proxy requests to that user's containers.
 
 ---
 
@@ -46,7 +47,9 @@ Set these before running `docker compose up`.
 | Variable | Required | Example | Description |
 |---|---|---|---|
 | `PROVISION_DIR` | ✓ | `/srv/provision` | Base directory; must be the same path inside and outside the container |
-| `PROVISION_API_PORT` | — | `8765` | Host port for the API (default `8765`) |
+| `PROVISION_API_PORT` | — | `8765` | Host port for the provision-api REST API (default `8765`) |
+| `NGINX_HTTP_PORT` | — | `80` | Host port for provision-nginx (default `80`) |
+| `NGINX_CONTAINER` | — | `provision-nginx` | Name of the nginx container to connect/reload on registration (default `provision-nginx`) |
 
 ---
 
@@ -66,8 +69,94 @@ services:
       - USER_DATA_DIR=${PROVISION_DIR}/user_data         # auto-created per-user volume dirs
       - SOURCE_PROJECTS_DIR=${PROVISION_DIR}/source_projects  # operator repo drop zone
       - REGISTRY_FILE=${PROVISION_DIR}/generated/user_registry.yml
+      - NGINX_CONTAINER=provision-nginx          # which container to connect/reload
+    restart: unless-stopped
+
+  provision-nginx:
+    image: nginx:alpine
+    container_name: provision-nginx
+    ports:
+      - "${NGINX_HTTP_PORT:-80}:80"             # host:container
+    volumes:
+      - ${PROVISION_DIR}:${PROVISION_DIR}:ro    # read-only; htpasswd paths must resolve
+      - ./user_provision_tool/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
+    environment:
+      - GENERATED_DIR=${PROVISION_DIR}/generated
+    # envsubst replaces only $GENERATED_DIR; all nginx $variables are left intact
+    command: >
+      /bin/sh -c "envsubst '$$GENERATED_DIR' < /etc/nginx/nginx.conf.template
+                  > /etc/nginx/nginx.conf && nginx -g 'daemon off;'"
     restart: unless-stopped
 ```
+
+The `nginx.conf.template` includes all per-user virtual-host confs at startup:
+
+```nginx
+# nginx.conf.template (simplified)
+http {
+    include ${GENERATED_DIR}/*.nginx.conf;   # ← envsubst fills GENERATED_DIR
+}
+```
+
+Each `*.nginx.conf` file is written by provision-api when a user registers. After writing
+the file, provision-api calls `docker exec provision-nginx nginx -s reload` so the new
+virtual host takes effect immediately without a container restart.
+
+---
+
+## Nginx Routing
+
+`provision-nginx` is an `nginx:alpine` container defined in `docker-compose.provision.yml`.
+It is the single ingress point for all HTTP traffic to all user containers.
+
+### How routing works
+
+```
+HTTP request
+  Host: myapp-alice-0.example.com
+        │
+        ▼
+  provision-nginx  (port 80)
+        │
+        │  nginx matches server_name in GENERATED_DIR/myapp.user-alice.0.nginx.conf
+        │
+        ▼
+  proxy_pass  http://myapp-user_alice-0-web:8000
+              (reachable because nginx is connected to the myapp-user_alice-0 network)
+```
+
+Routing is virtual-host based (matched by the `Host:` header / `server_name` directive).
+Each registered user gets their own `*.nginx.conf` in `GENERATED_DIR`.
+
+### Config loading
+
+`nginx.conf.template` is mounted read-only into the container. At container startup,
+`envsubst` substitutes `$GENERATED_DIR` to produce `/etc/nginx/nginx.conf`:
+
+```nginx
+http {
+    include ${GENERATED_DIR}/*.nginx.conf;   # expands to e.g. /srv/provision/generated/*.nginx.conf
+}
+```
+
+Only `$GENERATED_DIR` is substituted; all nginx `$variables` (e.g. `$host`, `$remote_addr`)
+are left intact by the `envsubst '$$GENERATED_DIR'` invocation.
+
+### Dynamic updates
+
+When provision-api registers or removes a user:
+
+1. It writes (or deletes) the user's `*.nginx.conf` in `GENERATED_DIR`.
+2. It runs `docker exec provision-nginx nginx -s reload` — nginx picks up the new conf
+   without a container restart.
+3. It calls `docker network connect {network_name} provision-nginx` (register) or
+   `docker network disconnect` (remove) so nginx can reach the user's containers.
+
+### Why user containers don't bind ports
+
+The compose converter strips the `ports:` key from all services in user compose files.
+All traffic flows through `provision-nginx`. This avoids host port conflicts between users
+running the same service type, and keeps user services unreachable except through nginx.
 
 ---
 

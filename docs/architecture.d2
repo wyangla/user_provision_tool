@@ -1,0 +1,36 @@
+direction: right
+
+operator: Operator {
+  shape: person
+}
+
+end_user: "End User\n(browser / curl)" {
+  shape: person
+}
+
+host: "Docker Host" {
+  upt: "User Provision Tool" {
+    provision_api: "provision-api\n(FastAPI · port 8765)"
+    provision_nginx: "provision-nginx\n(nginx · port 80)"
+  }
+
+  docker_daemon: "Docker Daemon"
+
+  provision_dir: "PROVISION_DIR\n(registry · templates · nginx confs)" {
+    shape: cylinder
+  }
+
+  user_nets: "User Containers\n(per-user isolated Docker networks)"
+}
+
+operator -> host.upt.provision_api: "REST API / CLI"
+end_user -> host.upt.provision_nginx: "HTTP\n(Host header routing)"
+
+host.upt.provision_api -> host.docker_daemon: "compose up/down/build\n+ network connect/disconnect"
+host.upt.provision_api -> host.provision_dir: "write registry\n& render configs"
+
+host.upt.provision_nginx -> host.provision_dir: "read *.nginx.conf\n(hot-reload)"
+host.upt.provision_nginx -> host.user_nets: "proxy_pass"
+
+host.docker_daemon -> host.user_nets: "start · stop · build"
+host.user_nets -> host.provision_dir: "bind mounts (volumes)"

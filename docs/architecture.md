@@ -1,5 +1,41 @@
 # Architecture: User Containers Provision Tool
 
+## High-Level Diagram
+
+```mermaid
+%%{init: {"flowchart": {"defaultRenderer": "elk"}, "elk": {"nodePlacementStrategy": "NETWORK_SIMPLEX", "edgeRouting": "SPLINES"}} }%%
+flowchart LR
+    operator(["Operator"])
+    end_user(["End User\nbrowser / curl"])
+
+    subgraph host["Docker Host"]
+        subgraph upt["User Provision Tool"]
+            direction TB
+            provision_api["provision-api\nFastAPI · :8765"]
+            provision_nginx["provision-nginx\nnginx · :80"]
+        end
+
+        docker_daemon["Docker Daemon"]
+        provision_dir[("PROVISION_DIR\nregistry · templates · confs")]
+        user_nets["User Containers\nper-user Docker networks"]
+    end
+
+    operator -->|"REST API / CLI"| provision_api
+    end_user -->|"HTTP · Host header"| provision_nginx
+
+    provision_api -->|"compose up/down\nnetwork connect"| docker_daemon
+    provision_api -->|"write registry & configs"| provision_dir
+
+    provision_nginx -->|"read *.nginx.conf"| provision_dir
+    provision_nginx -->|"proxy_pass"| user_nets
+
+    docker_daemon -->|"start · stop · build"| user_nets
+    user_nets -->|"bind mounts"| provision_dir
+
+    style upt fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+```
+
+
 ## Directory Layout
 
 ```
@@ -62,7 +98,7 @@ user_provision_tool/
 | `registry.py` | Load/save `user_registry.yml`; add/remove/query entries by user+service+label |
 | `template_engine.py` | Extract template volumes; render compose and nginx files via Jinja2; copy `.env` alongside output |
 | `auth.py` | `getpass` prompt; bcrypt hash via `passlib.hash.bcrypt`; write `.htpasswd` file |
-| `docker_ops.py` | `compose_up`, `compose_down`, `compose_build`, `docker_ps` wrappers; `--env-file` and `--project-name` flags; `DOCKER_BUILDKIT=1` set in subprocess env |
+| `docker_ops.py` | `compose_up`, `compose_down`, `compose_build`, `docker_ps`, `network_connect`, `network_disconnect`, `nginx_reload` wrappers; `--env-file` and `--project-name` flags; `DOCKER_BUILDKIT=1` set in subprocess env |
 | `provisioner.py` | Shared workflow for register/remove/rebuild; both `api.py` and `cli/` delegate here |
 | `compose_converter.py` | Parse a plain `docker-compose.yml` and emit a Jinja2 `.yml.j2` template; services with named profiles are excluded; `profiles:` key is stripped from kept services |
 | `nginx_converter.py` | Apply regex substitutions to a plain nginx conf and emit a `.j2` template |
@@ -167,6 +203,7 @@ Input: user_name, service_name, label
 7. **`user_registry.yml` as source of truth** — `cli/status.py` and `GET /users` cross-reference live `docker ps` output against registry entries to compute per-service health.
 8. **Docker Compose project isolation** — every `compose_up`, `compose_down`, and `compose_build` call passes `--project-name {network_name}`. Because all rendered compose files share the same source directory, omitting this would cause Compose to infer the same project name for all users and tear down one user's containers when starting another's.
 9. **BuildKit enabled in subprocesses** — all `docker` subprocess calls inherit `DOCKER_BUILDKIT=1` from `os.environ`. This is required for Docker 29+ (where BuildKit is the default builder) and enables `--mount=type=cache` and other BuildKit Dockerfile features.
+10. **`provision-nginx` as shared ingress** — user containers never bind host ports (`ports:` is stripped from compose templates). All HTTP traffic enters through the `provision-nginx` sibling container, which routes by virtual host (`Host:` header → `server_name`). After every registration or removal, provision-api connects/disconnects nginx to the user's isolated Docker network and calls `nginx -s reload` to update routing without a container restart.
 
 ---
 
