@@ -8,7 +8,9 @@ Usage:
         [-tn NGINX_TEMPLATE | -fn NGINX_FILE]
         [-l LABEL] [-d DOMAIN]
 
--pr  Project root directory (e.g. source_project/service_1).
+-pr  Project root directory.
+       Accepts a full path, relative path, or just a directory name.
+       A bare name (e.g. "myapp") is resolved to SOURCE_PROJECTS_DIR/myapp.
        • All generated files (rendered compose, nginx conf, htpasswd) are
          written here so they live alongside the Dockerfile / source tree
        • 'build: .' contexts in compose files resolve correctly
@@ -45,6 +47,10 @@ USER_DATA_DIR = Path(
     os.environ.get("USER_DATA_DIR", str(Path(__file__).parent.parent / "user_data"))
 )
 
+SOURCE_PROJECTS_DIR = Path(
+    os.environ.get("SOURCE_PROJECTS_DIR", str(Path(__file__).parent.parent / "source_projects"))
+)
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Register a user and start their service containers.")
@@ -52,9 +58,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("-sn", "--service-name", required=True, help="Service name")
     p.add_argument("-pr", "--project-root", required=True,
         help=(
-            "Project root directory (e.g. source_project/service_1). "
-            "Generated files are written here; all source filenames (-tc/-fc/-tn/-fn) "
-            "are resolved relative to this directory."
+            "Project root directory. Can be a full path, a relative path, or just a "
+            "directory name — in which case it is resolved to "
+            "SOURCE_PROJECTS_DIR/{name}. Generated files are written here; all source "
+            "filenames (-tc/-fc/-tn/-fn) are resolved relative to this directory."
         ),
     )
 
@@ -136,7 +143,12 @@ def main() -> None:
         sys.exit(1)
 
     # --- Resolve project root ---
-    project_root = Path(args.project_root).resolve()
+    # A bare name (no path separators, doesn't exist as-is) resolves to SOURCE_PROJECTS_DIR/{name}
+    raw_pr = Path(args.project_root)
+    if not raw_pr.is_absolute() and os.sep not in args.project_root and "/" not in args.project_root and not raw_pr.is_dir():
+        project_root = (SOURCE_PROJECTS_DIR / args.project_root).resolve()
+    else:
+        project_root = raw_pr.resolve()
     if not project_root.is_dir():
         print(f"ERROR: project root not found: {project_root}", file=sys.stderr)
         sys.exit(1)

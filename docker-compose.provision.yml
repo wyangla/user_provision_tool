@@ -14,6 +14,7 @@ services:
       - SOURCE_PROJECTS_DIR=${PROVISION_DIR}/source_projects
       - REGISTRY_FILE=${PROVISION_DIR}/generated/user_registry.yml
       - NGINX_CONTAINER=provision-nginx
+      - DOCKER_OPS_LOG=${PROVISION_DIR}/generated/docker_ops.log
     restart: unless-stopped
 
   provision-nginx:

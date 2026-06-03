@@ -824,3 +824,69 @@ class TestE2EConverterIntegration:
             with pytest.raises(SystemExit) as exc:
                 reg_script.main()
         assert exc.value.code != 0
+
+
+# ---------------------------------------------------------------------------
+# E2E: Project-root bare-name resolution  (-pr myapp → SOURCE_PROJECTS_DIR/myapp)
+# ---------------------------------------------------------------------------
+
+class TestE2EProjectRootResolution:
+    """E2E tests for '-pr bare_name' resolution in cli.register."""
+
+    def test_bare_pr_resolves_via_source_projects_dir(
+        self, tmp_path, mock_docker, monkeypatch
+    ):
+        """-pr 'myapp' resolves to SOURCE_PROJECTS_DIR/myapp when that dir exists."""
+        import shutil
+        import cli.register as reg_script
+
+        source_projects = tmp_path / "source_projects"
+        project_dir = source_projects / "myapp"
+        project_dir.mkdir(parents=True)
+        shutil.copy(FIXTURES_DIR / "docker-compose.template.yml.j2", project_dir)
+        shutil.copy(FIXTURES_DIR / "myapp.template.nginx.conf.j2", project_dir)
+
+        # Patch the module-level SOURCE_PROJECTS_DIR so bare-name lookup uses tmp_path
+        monkeypatch.setattr(reg_script, "SOURCE_PROJECTS_DIR", source_projects)
+        monkeypatch.setattr("getpass.getpass", lambda prompt="": "secret123")
+        monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+
+        sys_argv = [
+            "cli/register.py",
+            "-u", "barename",
+            "-sn", "myapp",
+            "-pr", "myapp",
+            "-tc", "docker-compose.template.yml.j2",
+            "-tn", "myapp.template.nginx.conf.j2",
+            "-l", "0",
+            "-d", "localhost",
+            "-v", "app_data=/srv/barename/app",
+            "-v", "db_data=/srv/barename/db",
+        ]
+        with patch.object(sys, "argv", sys_argv):
+            reg_script.main()
+
+        entry = reg_mod.get_user_service("barename", "myapp", "0")
+        assert entry is not None, "Registration with bare -pr did not create registry entry"
+
+    def test_bare_pr_nonexistent_exits_nonzero(self, tmp_path, mock_docker, monkeypatch):
+        """-pr bare name with no matching dir in SOURCE_PROJECTS_DIR exits non-zero."""
+        import cli.register as reg_script
+
+        source_projects = tmp_path / "source_projects"
+        source_projects.mkdir()
+        monkeypatch.setattr(reg_script, "SOURCE_PROJECTS_DIR", source_projects)
+        monkeypatch.setattr("getpass.getpass", lambda prompt="": "secret")
+
+        sys_argv = [
+            "cli/register.py",
+            "-u", "barename",
+            "-sn", "myapp",
+            "-pr", "nonexistent",
+            "-tc", "docker-compose.template.yml.j2",
+            "-l", "0",
+        ]
+        with patch.object(sys, "argv", sys_argv):
+            with pytest.raises(SystemExit) as exc:
+                reg_script.main()
+        assert exc.value.code != 0

@@ -78,9 +78,9 @@ user_provision_tool/
 │
 └── tests/
     ├── conftest.py                # Shared pytest fixtures
-    ├── test_unit.py               # Unit tests (88)
-    ├── test_e2e.py                # End-to-end pytest tests (32)
-    ├── test_integration.sh        # Full Docker integration test (17)
+    ├── test_unit.py               # Unit tests (90)
+    ├── test_e2e.py                # End-to-end pytest tests (36)
+    ├── test_integration.sh        # Full Docker integration test (17 tests · 28 assertions)
     └── fixtures/
         ├── docker-compose.template.yml.j2
         ├── myapp.template.nginx.conf.j2
@@ -98,10 +98,10 @@ user_provision_tool/
 | `registry.py` | Load/save `user_registry.yml`; add/remove/query entries by user+service+label |
 | `template_engine.py` | Extract template volumes; render compose and nginx files via Jinja2; copy `.env` alongside output |
 | `auth.py` | `getpass` prompt; bcrypt hash via `passlib.hash.bcrypt`; write `.htpasswd` file |
-| `docker_ops.py` | `compose_up`, `compose_down`, `compose_build`, `docker_ps`, `network_connect`, `network_disconnect`, `nginx_reload` wrappers; `--env-file` and `--project-name` flags; `DOCKER_BUILDKIT=1` set in subprocess env |
+| `docker_ops.py` | `compose_up`, `compose_down`, `compose_build`, `docker_ps`, `network_connect`, `network_disconnect`, `nginx_reload` wrappers; captures stdout/stderr; error messages include stderr detail; writes to `DOCKER_OPS_LOG` file when env var is set |
 | `provisioner.py` | Shared workflow for register/remove/rebuild; both `api.py` and `cli/` delegate here |
 | `compose_converter.py` | Parse a plain `docker-compose.yml` and emit a Jinja2 `.yml.j2` template; services with named profiles are excluded; `profiles:` key is stripped from kept services |
-| `nginx_converter.py` | Apply regex substitutions to a plain nginx conf and emit a `.j2` template |
+| `nginx_converter.py` | Apply regex substitutions to a plain nginx conf and emit a `.j2` template; injects `auth_basic` + `auth_basic_user_file` directives before the first `proxy_pass` if none are already present |
 
 ---
 

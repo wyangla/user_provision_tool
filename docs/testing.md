@@ -3,14 +3,15 @@
 The test suite has three layers:
 
 ```
-Integration (bash)   tests/test_integration.sh     17 tests
+Integration (bash)   tests/test_integration.sh     17 tests · 28 assertions
   └─ full Docker round-trip: build image → start API → register → rebuild → remove
     also covers -fc / -fn plain-file conversion via the API
+    also covers passwd='' (no-auth) and default-passwd (auth enabled) paths
 
-E2E (pytest)         tests/test_e2e.py              32 tests
+E2E (pytest)         tests/test_e2e.py              36 tests
   └─ exercise CLI scripts end-to-end against real files, no Docker
 
-Unit (pytest)        tests/test_unit.py             88 tests
+Unit (pytest)        tests/test_unit.py             90 tests
   └─ individual lib/ functions in isolation, all I/O mocked
 ```
 
@@ -51,6 +52,7 @@ Notable patterns:
 - `TestE2ERegistration` — basic registration, dedup, network isolation.
 - `TestE2ERemoval` / `TestE2ERebuild` / `TestE2EStatus` — lifecycle operations.
 - `TestE2EConverterIntegration` — `-fc` and `-fn` flags: plain file conversion + registration.
+- `TestE2ENoPassword` — registration with `passwd=''`: no `.htpasswd` written, `auth_basic` directives stripped from rendered nginx conf.
 - `TestE2EFullLifecycle` — register → status → rebuild → remove round-trip.
 
 ---
@@ -66,20 +68,23 @@ Runs the full end-to-end cycle against a real Docker daemon:
 Build provision-api image
   └─ Start provision-api container
        └─ Wait for /health
-            ├─ GET  /users                        → empty list
-            ├─ POST /users                        → register testuser/myapp/0
-            ├─ POST /users (duplicate)            → 409
-            ├─ docker ps                          → web + db containers running
-            ├─ GET  /users/testuser               → 1 healthy service
-            ├─ POST .../rebuild                   → rebuilt
-            ├─ docker ps                          → containers still running
-            ├─ DELETE .../myapp/0                 → removed
-            ├─ docker ps                          → web + db containers gone
-            ├─ GET  /users                        → empty list
-            ├─ POST /users with plain compose (-fc) → auto-converted + registered
+            ├─ GET  /users                            → empty list
+            ├─ POST /users (with passwd)              → register testuser/myapp/0; htpasswd written
+            ├─ POST /users (duplicate)                → 409
+            ├─ docker ps                              → web + db containers running
+            ├─ GET  /users/testuser                   → 1 healthy service
+            ├─ POST .../rebuild                       → rebuilt
+            ├─ docker ps                              → containers still running
+            ├─ DELETE .../myapp/0                     → removed
+            ├─ docker ps                              → web + db containers gone
+            ├─ GET  /users                            → empty list
+            ├─ POST /users with plain compose (-fc)   → auto-converted + registered
             ├─ validate .j2 template written into source dir
             ├─ DELETE file-registered user
-            ├─ POST /users with invalid compose   → 400
+            ├─ POST /users with invalid compose       → 400
+            ├─ POST /users with passwd=''             → no htpasswd, auth_basic stripped
+            ├─ POST /users with default passwd        → htpasswd written, auth_basic present
+            ├─ POST /users bare project_root          → resolves to SOURCE_PROJECTS_DIR/{name}
             └─ nginx reload called after each registration
 ```
 
@@ -94,7 +99,7 @@ bash tests/test_integration.sh
 
 Expected output:
 ```
-Results: 17 passed, 0 failed
+Results: 25 passed, 0 failed
 ```
 
 The test creates an isolated `PROVISION_DIR` in a temp directory and tears everything
@@ -112,7 +117,7 @@ uv sync
 python -m pytest tests/test_unit.py tests/test_e2e.py -v
 ```
 
-Expected: **120 passed** (88 unit + 32 e2e).
+Expected: **132 passed** (94 unit + 38 e2e).
 
 ---
 

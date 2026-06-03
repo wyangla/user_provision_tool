@@ -172,6 +172,11 @@ The converters apply these substitutions:
 | `auth_basic` | `→ {{ service_name }} — {{ user_name }}` |
 | `auth_basic_user_file` | `→ {{ htpasswd_path }}` |
 | `proxy_pass` host prefixed with service name | `→ {{ container_prefix }}{suffix}` |
+| _(no `auth_basic` block present)_ | Injects `auth_basic "{{ service_name }} - {{ user_name }}";` and `auth_basic_user_file {{ htpasswd_path }};` before the first `proxy_pass` |
+
+> **Password stripping**: when `passwd` is empty (`""`), `render_nginx_conf()` strips all
+> `auth_basic` and `auth_basic_user_file` lines from the rendered nginx conf, so no
+> authentication directives appear in the final file for no-auth users.
 
 ---
 

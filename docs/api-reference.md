@@ -36,28 +36,30 @@ Liveness probe — does not touch Docker.
 |---|---|---|---|
 | `user_name` | string | ✓ | Alphanumeric + underscore |
 | `service_name` | string | ✓ | Alphanumeric + underscore |
-| `compose_template_path` | string | ✓ | Absolute path to a `.j2` compose template inside the container |
-| `nginx_conf_template_path` | string | — | Absolute path to a `.j2` nginx conf template (optional) |
+| `project_root` | string | — | Base directory for this service. Accepts a bare name (`"myapp"`), relative path, or absolute path. A bare name resolves to `SOURCE_PROJECTS_DIR/myapp`. Equivalent to `-pr` in the CLI |
+| `compose_file_path` | string | † | Path to a **plain** `docker-compose.yml` inside the container; auto-converted to a `.j2` template on every registration (manual edits to the generated `.j2` will be overwritten) |
+| `compose_template_path` | string | † | Path to an existing `.j2` compose template (use instead of `compose_file_path` when you need a hand-crafted template) |
+| `nginx_conf_file_path` | string | — | Path to a **plain** nginx conf file; auto-converted to a `.j2` template |
+| `nginx_conf_template_path` | string | — | Path to an existing `.j2` nginx conf template (use instead of `nginx_conf_file_path`) |
 | `env_file_path` | string | — | Absolute path to a `.env` file for Docker Compose variable substitution |
 | `label` | string | — | Digits only; default `"0"` |
 | `domain` | string | — | Domain for nginx `server_name`; default `"localhost"` |
-| `passwd` | string | — | Plain-text password; hashed with bcrypt before storage |
+| `passwd` | string | — | Plain-text password; default `"123456"`. Hashed with bcrypt before storage. Pass `""` to disable auth entirely (no `.htpasswd` written, `auth_basic` lines stripped from nginx conf) |
 | `volumes` | object | — | `{ "template_vol_key": "/host/path", ... }` |
 
-**Example**
+> † Exactly one of `compose_file_path` or `compose_template_path` must be provided.
+
+**Example** (simplest: bare service name as `project_root` + filenames)
 ```json
 {
   "user_name": "alice",
   "service_name": "myapp",
-  "compose_template_path": "/srv/provision/templates/myapp.yml.j2",
-  "env_file_path": "/srv/provision/templates/myapp.env",
-  "label": "0",
+  "project_root": "myapp",
+  "compose_file_path": "docker-compose.yml",
+  "nginx_conf_file_path": "nginx.conf",
+  "env_file_path": ".env",
   "domain": "example.com",
-  "passwd": "secret",
-  "volumes": {
-    "app_data": "/srv/provision/user-data/alice/app",
-    "db_data":  "/srv/provision/user-data/alice/db"
-  }
+  "passwd": "secret"
 }
 ```
 
@@ -79,6 +81,8 @@ Liveness probe — does not touch Docker.
 }
 ```
 
+> **Note on `htpasswd_path`**: this field is `null` in the response when `passwd` is empty (no-auth mode). When a password is provided, it points to the written `.htpasswd` file.
+
 > **Output locations**: the rendered compose file is written into the same directory as the
 > `compose_template_path` (the source project root), so that `build: .` references resolve
 > correctly. Nginx conf and `.htpasswd` files are written into `GENERATED_DIR`.
@@ -90,7 +94,7 @@ Liveness probe — does not touch Docker.
 | `404` | Template file not found inside the container |
 | `409` | The `user_name` + `service_name` + `label` combination is already registered |
 | `422` | Validation error on `user_name`, `service_name`, or `label` format |
-| `500` | `docker compose up` failed |
+| `500` | `docker compose up` failed; error message includes stderr output for diagnosis |
 
 ---
 
@@ -198,4 +202,5 @@ A service is **missing** when its compose file does not exist (e.g. was deleted 
 |---|---|---|
 | `GENERATED_DIR` | `./generated` | Directory for nginx conf, htpasswd, and `user_registry.yml` |
 | `REGISTRY_FILE` | `./user_registry.yml` | Path to the registry state file |
+| `DOCKER_OPS_LOG` | _(unset)_ | If set, path to a file where all docker command stdout/stderr is appended for debugging (e.g. `${PROVISION_DIR}/generated/docker_ops.log`) |
 | `PROVISION_API_PORT` | `8765` | Host port (set in `docker-compose.provision.yml`) |

@@ -580,6 +580,60 @@ fi
 curl -sf -X DELETE "$API_URL/users/nginxuser/services/myapp/0" >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
+# Test 17: project_root bare name resolves to SOURCE_PROJECTS_DIR/{name}
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 17: project_root bare name → SOURCE_PROJECTS_DIR/testpr ---"
+# SOURCE_PROJECTS_DIR inside the container is ${PROVISION_DIR}/source_projects (set by docker-compose)
+mkdir -p "${PROVISION_DIR}/source_projects/testpr"
+cp "$PROVISION_DIR/templates/docker-compose.template.yml.j2" "${PROVISION_DIR}/source_projects/testpr/"
+cp "$PROVISION_DIR/templates/myapp.template.nginx.conf.j2"  "${PROVISION_DIR}/source_projects/testpr/" 2>/dev/null || true
+
+REGISTER_BODY_PR=$(cat <<EOF
+{
+  "user_name": "pruser",
+  "service_name": "myapp",
+  "project_root": "testpr",
+  "compose_template_path": "docker-compose.template.yml.j2",
+  "nginx_conf_template_path": "myapp.template.nginx.conf.j2",
+  "label": "0",
+  "domain": "localhost",
+  "passwd": "secret"
+}
+EOF
+)
+pr_resp=$(curl -sf -X POST "$API_URL/users" \
+    -H "Content-Type: application/json" \
+    -d "$REGISTER_BODY_PR")
+pr_status=$(echo "$pr_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
+if [ "$pr_status" = "registered" ]; then
+    pass "Bare project_root 'testpr' resolves to SOURCE_PROJECTS_DIR/testpr: registration succeeded"
+else
+    fail "Bare project_root registration failed: $pr_resp"
+fi
+
+# Compose file should be written inside source_projects/testpr/, not in templates/
+pr_compose=$(echo "$pr_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['entry'].get('compose_file_path',''))" 2>/dev/null || echo "")
+if echo "$pr_compose" | grep -q "source_projects/testpr"; then
+    pass "Generated compose file written inside project_root (source_projects/testpr): $pr_compose"
+else
+    fail "Expected compose path under source_projects/testpr, got: $pr_compose"
+fi
+
+# Verify that a bare name pointing to a non-existent dir returns 404
+pr_404=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_URL/users" \
+    -H "Content-Type: application/json" \
+    -d '{"user_name":"x","service_name":"y","project_root":"no_such_dir","compose_template_path":"a.yml.j2"}')
+if [ "$pr_404" = "404" ]; then
+    pass "Bare project_root pointing to non-existent dir returns 404"
+else
+    fail "Expected 404 for non-existent bare project_root, got: $pr_404"
+fi
+
+# Clean up
+curl -sf -X DELETE "$API_URL/users/pruser/services/myapp/0" >/dev/null 2>&1 || true
+
+# ---------------------------------------------------------------------------
 # Results
 # ---------------------------------------------------------------------------
 echo ""

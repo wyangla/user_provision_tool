@@ -81,23 +81,26 @@ mkdir -p $PROVISION_DIR/generated $PROVISION_DIR/source_projects/myapp
 docker compose -f docker-compose.provision.yml up -d --build
 ```
 
-**3. Register a user — point straight at your plain files**
+**3. Register a user — just the service name and filenames**
 ```bash
 curl -X POST http://localhost:8765/users \
   -H 'Content-Type: application/json' \
   -d '{
     "user_name": "alice",
     "service_name": "myapp",
-    "compose_file_path": "/srv/provision/source_projects/myapp/docker-compose.yml",
-    "nginx_conf_file_path": "/srv/provision/source_projects/myapp/nginx.conf",
-    "env_file_path": "/srv/provision/source_projects/myapp/.env",
+    "project_root": "myapp",
+    "compose_file_path": "docker-compose.yml",
+    "nginx_conf_file_path": "nginx.conf",
+    "env_file_path": ".env",
     "domain": "example.com",
     "passwd": "secret"
   }'
 ```
 
-> The tool auto-converts `docker-compose.yml` → `docker-compose.yml.j2` and `nginx.conf` → `nginx.conf.j2`
-> on first use. Subsequent registrations reuse the generated templates.
+> `project_root` can be a bare name (`"myapp"`), a relative path, or a full absolute path. A bare name resolves to `SOURCE_PROJECTS_DIR/myapp`.
+> `SOURCE_PROJECTS_DIR` defaults to `$PROVISION_DIR/source_projects` (set in `docker-compose.provision.yml`). Override it with the `SOURCE_PROJECTS_DIR` env var.
+>
+> **Password / auth**: `passwd` defaults to `"123456"`. Pass `"passwd": ""` to disable HTTP basic auth entirely — no `.htpasswd` file is created and `auth_basic` directives are stripped from the rendered nginx conf.
 
 **4. Check status**
 ```bash
@@ -114,16 +117,22 @@ curl -X DELETE http://localhost:8765/users/alice/services/myapp/0
 ## Quick Start (CLI)
 
 ```bash
-# Register — point at your plain compose file and nginx conf directly
+# Register — just the service name as project root + filenames
 python cli/register.py \
   -u alice -sn myapp \
-  -pr /srv/provision/source_projects/myapp \
+  -pr myapp \
   -fc docker-compose.yml \
   -fn nginx.conf \
   -e .env \
   -d example.com
 
-# Already have .j2 templates? Use -tc / -tn instead of -fc / -fn
+# Or use a full path when the project isn't under SOURCE_PROJECTS_DIR
+python cli/register.py \
+  -u alice -sn myapp \
+  -pr /srv/provision/source_projects/myapp \
+  -fc docker-compose.yml \
+  -fn nginx.conf \
+  -d example.com
 
 # Status
 python cli/status.py -u alice
@@ -194,7 +203,7 @@ flowchart LR
 # Install dependencies (requires uv)
 uv sync
 
-# Run unit + e2e tests (112 tests, no Docker needed)
+# Run unit + e2e tests (132 tests, no Docker needed)
 python -m pytest tests/test_unit.py tests/test_e2e.py -v
 
 # Run full integration tests (requires Docker)

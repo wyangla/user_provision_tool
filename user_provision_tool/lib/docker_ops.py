@@ -9,17 +9,40 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
+
+
+_LOG_FILE = os.environ.get("DOCKER_OPS_LOG", "")
+
+
+def _write_log(text: str) -> None:
+    if _LOG_FILE:
+        try:
+            Path(_LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
+            with open(_LOG_FILE, "a") as f:
+                f.write(text)
+        except Exception:
+            pass
 
 
 def _run(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
     print(f"+ {' '.join(args)}", flush=True)
+    _write_log(f"+ {' '.join(args)}\n")
     # Enable BuildKit so Dockerfiles using --mount=type=cache and other
     # BuildKit features work correctly.
     env = {**os.environ, "DOCKER_BUILDKIT": "1"}
-    result = subprocess.run(args, text=True, capture_output=False, env=env)
+    result = subprocess.run(args, text=True, capture_output=True, env=env)
+    if result.stdout:
+        print(result.stdout, end="", flush=True)
+        _write_log(result.stdout)
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr, flush=True)
+        _write_log(result.stderr)
     if check and result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
         raise RuntimeError(
             f"Command failed (exit {result.returncode}): {' '.join(args)}"
+            + (f"\n{detail}" if detail else "")
         )
     return result
 

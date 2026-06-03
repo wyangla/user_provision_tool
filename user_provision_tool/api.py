@@ -69,6 +69,9 @@ _reg_mod.REGISTRY_FILE = Path(_reg_path)
 class RegisterRequest(BaseModel):
     user_name: str
     service_name: str
+    # Optional project root — when provided, any relative path below is resolved against it
+    # (equivalent to -pr in the CLI)
+    project_root: str | None = None
     # Exactly one of these must be provided:
     #   compose_template_path — path to an existing Jinja2 .yml.j2 template
     #   compose_file_path     — path to a plain docker-compose.yml (auto-converted)
@@ -142,11 +145,36 @@ def health() -> dict[str, str]:
 
 @app.post("/users", status_code=201)
 def register_user(req: RegisterRequest) -> dict[str, Any]:
+    # --- Resolve project_root: bare name → SOURCE_PROJECTS_DIR/{name} ---
+    resolved_root: Path | None = None
+    if req.project_root:
+        raw = Path(req.project_root)
+        if raw.is_absolute() or raw.is_dir():
+            resolved_root = raw
+        else:
+            resolved_root = SOURCE_PROJECTS_DIR / req.project_root
+        if not resolved_root.is_dir():
+            raise HTTPException(404, f"project_root not found: {resolved_root}")
+
+    # --- Resolve paths relative to project_root when given ---
+    def _resolve(p: str | None) -> str | None:
+        if p is None:
+            return None
+        if resolved_root and not Path(p).is_absolute():
+            return str(resolved_root / p)
+        return p
+
+    compose_file_path      = _resolve(req.compose_file_path)
+    compose_template_path  = _resolve(req.compose_template_path)
+    nginx_conf_file_path   = _resolve(req.nginx_conf_file_path)
+    nginx_conf_template_path = _resolve(req.nginx_conf_template_path)
+    env_file_path          = _resolve(req.env_file_path)
+
     # --- Resolve compose template (convert plain file if needed) ---
-    if req.compose_file_path:
-        src = Path(req.compose_file_path)
+    if compose_file_path:
+        src = Path(compose_file_path)
         if not src.exists():
-            raise HTTPException(404, f"compose_file_path not found: {req.compose_file_path}")
+            raise HTTPException(404, f"compose_file_path not found: {compose_file_path}")
         template_out = str(src.parent / f"{src.stem}.yml.j2")
         try:
             compose_file_to_template(str(src), template_out, service_name_hint=req.service_name)
@@ -154,26 +182,26 @@ def register_user(req: RegisterRequest) -> dict[str, Any]:
             raise HTTPException(422, f"could not convert compose file: {e}")
         compose_template = template_out
     else:
-        if not Path(req.compose_template_path).exists():
-            raise HTTPException(404, f"compose_template_path not found: {req.compose_template_path}")
-        compose_template = req.compose_template_path
+        if not Path(compose_template_path).exists():
+            raise HTTPException(404, f"compose_template_path not found: {compose_template_path}")
+        compose_template = compose_template_path
 
     # --- Resolve nginx template (convert plain file if needed) ---
     nginx_template: str | None = None
-    if req.nginx_conf_file_path:
-        src = Path(req.nginx_conf_file_path)
+    if nginx_conf_file_path:
+        src = Path(nginx_conf_file_path)
         if not src.exists():
-            raise HTTPException(404, f"nginx_conf_file_path not found: {req.nginx_conf_file_path}")
+            raise HTTPException(404, f"nginx_conf_file_path not found: {nginx_conf_file_path}")
         template_out = str(src.parent / f"{src.name}.j2")
         try:
             nginx_file_to_template(str(src), template_out, req.service_name)
         except Exception as e:
             raise HTTPException(422, f"could not convert nginx conf file: {e}")
         nginx_template = template_out
-    elif req.nginx_conf_template_path:
-        if not Path(req.nginx_conf_template_path).exists():
-            raise HTTPException(404, f"nginx_conf_template_path not found: {req.nginx_conf_template_path}")
-        nginx_template = req.nginx_conf_template_path
+    elif nginx_conf_template_path:
+        if not Path(nginx_conf_template_path).exists():
+            raise HTTPException(404, f"nginx_conf_template_path not found: {nginx_conf_template_path}")
+        nginx_template = nginx_conf_template_path
 
     # --- Delegate to shared provisioner ---
     try:
@@ -189,7 +217,7 @@ def register_user(req: RegisterRequest) -> dict[str, Any]:
             passwd=req.passwd,
             nginx_template=nginx_template,
             domain=req.domain,
-            env_file=req.env_file_path,
+            env_file=env_file_path,
             nginx_container=NGINX_CONTAINER,
         )
     except ValueError as e:

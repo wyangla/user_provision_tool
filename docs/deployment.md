@@ -50,6 +50,7 @@ Set these before running `docker compose up`.
 | `PROVISION_API_PORT` | — | `8765` | Host port for the provision-api REST API (default `8765`) |
 | `NGINX_HTTP_PORT` | — | `80` | Host port for provision-nginx (default `80`) |
 | `NGINX_CONTAINER` | — | `provision-nginx` | Name of the nginx container to connect/reload on registration (default `provision-nginx`) |
+| `DOCKER_OPS_LOG` | — | `${PROVISION_DIR}/generated/docker_ops.log` | If set, all docker command stdout/stderr is appended here for debugging |
 
 ---
 
@@ -59,6 +60,7 @@ Set these before running `docker compose up`.
 services:
   provision-api:
     build: .                                 # builds from ./Dockerfile
+    container_name: provision-api
     ports:
       - "${PROVISION_API_PORT:-8765}:8000"   # host:container
     volumes:
@@ -70,6 +72,7 @@ services:
       - SOURCE_PROJECTS_DIR=${PROVISION_DIR}/source_projects  # operator repo drop zone
       - REGISTRY_FILE=${PROVISION_DIR}/generated/user_registry.yml
       - NGINX_CONTAINER=provision-nginx          # which container to connect/reload
+      - DOCKER_OPS_LOG=${PROVISION_DIR}/generated/docker_ops.log  # optional debug log
     restart: unless-stopped
 
   provision-nginx:
@@ -79,20 +82,20 @@ services:
       - "${NGINX_HTTP_PORT:-80}:80"             # host:container
     volumes:
       - ${PROVISION_DIR}:${PROVISION_DIR}:ro    # read-only; htpasswd paths must resolve
-      - ./user_provision_tool/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
+      - ./user_provision_tool/nginx.provision.conf:/etc/nginx/nginx.provision.conf:ro
     environment:
       - GENERATED_DIR=${PROVISION_DIR}/generated
     # envsubst replaces only $GENERATED_DIR; all nginx $variables are left intact
     command: >
-      /bin/sh -c "envsubst '$$GENERATED_DIR' < /etc/nginx/nginx.conf.template
+      /bin/sh -c "envsubst '$$GENERATED_DIR' < /etc/nginx/nginx.provision.conf
                   > /etc/nginx/nginx.conf && nginx -g 'daemon off;'"
     restart: unless-stopped
 ```
 
-The `nginx.conf.template` includes all per-user virtual-host confs at startup:
+The `nginx.provision.conf` includes all per-user virtual-host confs at startup:
 
 ```nginx
-# nginx.conf.template (simplified)
+# nginx.provision.conf (simplified)
 http {
     include ${GENERATED_DIR}/*.nginx.conf;   # ← envsubst fills GENERATED_DIR
 }
@@ -130,7 +133,7 @@ Each registered user gets their own `*.nginx.conf` in `GENERATED_DIR`.
 
 ### Config loading
 
-`nginx.conf.template` is mounted read-only into the container. At container startup,
+`nginx.provision.conf` is mounted read-only into the container. At container startup,
 `envsubst` substitutes `$GENERATED_DIR` to produce `/etc/nginx/nginx.conf`:
 
 ```nginx

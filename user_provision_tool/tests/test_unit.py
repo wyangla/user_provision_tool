@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import shutil
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -733,3 +734,102 @@ class TestProvisioner:
         user_data = tmp_path / "user_data"
         _auto_volumes(COMPOSE_TEMPLATE, "alice", "myapp", "0", user_data)
         _auto_volumes(COMPOSE_TEMPLATE, "alice", "myapp", "0", user_data)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# api — project_root bare-name resolution
+# ---------------------------------------------------------------------------
+
+
+class TestAPIProjectRoot:
+    """Unit tests for project_root bare-name resolution in POST /users."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path, monkeypatch):
+        """Redirect all paths and mock docker calls for API endpoint tests."""
+        import api
+        from lib import registry as reg_mod, docker_ops
+
+        gen_dir = tmp_path / "generated"
+        ud_dir = tmp_path / "user_data"
+        sp_dir = tmp_path / "source_projects"
+        gen_dir.mkdir()
+        ud_dir.mkdir()
+        sp_dir.mkdir()
+
+        monkeypatch.setattr(api, "GENERATED_DIR", gen_dir)
+        monkeypatch.setattr(api, "USER_DATA_DIR", ud_dir)
+        monkeypatch.setattr(api, "SOURCE_PROJECTS_DIR", sp_dir)
+        monkeypatch.setattr(reg_mod, "REGISTRY_FILE", tmp_path / "user_registry.yml")
+
+        mock_run = MagicMock(return_value=MagicMock(returncode=0))
+        monkeypatch.setattr(docker_ops.subprocess, "run", mock_run)
+
+        self.sp_dir = sp_dir
+        self.tmp_path = tmp_path
+
+    def _call(self, **kwargs):
+        """Call register_user() directly and return the result (or raise HTTPException)."""
+        from api import register_user, RegisterRequest
+        return register_user(RegisterRequest(**kwargs))
+
+    def test_bare_project_root_resolves_to_source_projects_dir(self):
+        """project_root='testpr' resolves to SOURCE_PROJECTS_DIR/testpr when that dir exists."""
+        project_dir = self.sp_dir / "testpr"
+        project_dir.mkdir()
+        shutil.copy(FIXTURES_DIR / "docker-compose.template.yml.j2", project_dir)
+        shutil.copy(FIXTURES_DIR / "myapp.template.nginx.conf.j2", project_dir)
+
+        result = self._call(
+            user_name="pruser",
+            service_name="myapp",
+            project_root="testpr",
+            compose_template_path="docker-compose.template.yml.j2",
+            nginx_conf_template_path="myapp.template.nginx.conf.j2",
+            label="0",
+            domain="localhost",
+            passwd="secret",
+        )
+        assert result["status"] == "registered"
+
+    def test_bare_project_root_not_found_returns_404(self):
+        """Bare project_root with no matching dir in SOURCE_PROJECTS_DIR raises HTTP 404."""
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            self._call(
+                user_name="pruser",
+                service_name="myapp",
+                project_root="nonexistent",
+                compose_template_path="docker-compose.template.yml.j2",
+                label="0",
+            )
+        assert exc_info.value.status_code == 404
+
+    def test_absolute_project_root_used_as_is(self):
+        """Absolute project_root is used directly, not prepended with SOURCE_PROJECTS_DIR."""
+        project_dir = self.tmp_path / "abs_project"
+        project_dir.mkdir()
+        shutil.copy(FIXTURES_DIR / "docker-compose.template.yml.j2", project_dir)
+
+        result = self._call(
+            user_name="pruser2",
+            service_name="myapp",
+            project_root=str(project_dir),
+            compose_template_path="docker-compose.template.yml.j2",
+            label="0",
+            domain="localhost",
+            passwd="secret",
+        )
+        assert result["status"] == "registered"
+
+    def test_no_project_root_absolute_template_path_works(self):
+        """Without project_root, an absolute compose_template_path is used directly."""
+        result = self._call(
+            user_name="pruser3",
+            service_name="myapp",
+            compose_template_path=COMPOSE_TEMPLATE,
+            label="0",
+            domain="localhost",
+            passwd="secret",
+        )
+        assert result["status"] == "registered"

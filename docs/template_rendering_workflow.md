@@ -122,6 +122,9 @@ source_project/service_1/          ← project root (-pr)
 │                                                             │
 │  → myapp.user-alice.0.nginx.conf  ──► GENERATED_DIR        │
 │  → myapp.user-alice.0.htpasswd    ──► GENERATED_DIR        │
+│                                                             │
+│  (when passwd='': auth_basic* lines stripped post-render;  │
+│   no .htpasswd written; htpasswd_path=null in registry)    │
 └─────────────────────────────────────────────────────────────┘
       │
       ▼
@@ -157,6 +160,8 @@ source_project/service_1/          ← project root (-pr)
 Two distinct substitution phases:
 
 - **Steps 0a–3** — `{{ var }}` Jinja2 expressions: registration-time, per-user values (names, paths, network, hostname)
+- **Step 0b note** — if the source nginx conf has **no** `auth_basic` block, `nginx_converter` automatically injects `auth_basic "{{ service_name }} - {{ user_name }}";` and `auth_basic_user_file {{ htpasswd_path }};` before the first `proxy_pass`
+- **Step 3 note** — when `passwd=''`, `render_nginx_conf()` strips all `auth_basic*` lines from the rendered output and skips writing the `.htpasswd` file; `htpasswd_path` is stored as `null` in the registry
 - **Step 4** — `${VAR}` shell env vars: runtime secrets/config supplied via `--env-file`, shared across all users of the same service
 - **Step 5** — post-compose networking: runs unconditionally; provision-nginx is connected to the new isolated network and reloaded
 

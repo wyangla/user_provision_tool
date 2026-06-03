@@ -44,7 +44,7 @@ parse args
   │
   ├─ validate user_name, service_name, label
   ├─ compare template volumes vs --volume flags → warn + prompt on mismatch
-  ├─ prompt for password interactively (skippable)
+  ├─ prompt for password interactively (Enter to use default `123456`; type empty = no auth)
   │
   ├─ provisioner.register_user()
   │       ├─ append entry to user_registry.yml
