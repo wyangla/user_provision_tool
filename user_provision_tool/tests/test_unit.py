@@ -213,6 +213,18 @@ class TestTemplateEngine:
         assert f"auth_basic_user_file {htpasswd};" in content
         assert "proxy_pass         http://myapp-user_alice-0-web:80;" in content
 
+    def test_render_nginx_conf_no_password_strips_auth_basic(self, tmp_path):
+        out = str(tmp_path / "myapp.user-alice.0.nginx.conf")
+        template_engine.render_nginx_conf(
+            NGINX_TEMPLATE, out,
+            user_name="alice", service_name="myapp", label="0",
+            domain_name="example.com", htpasswd_path="",
+        )
+        content = Path(out).read_text()
+        assert "server_name myapp-alice-0.example.com;" in content
+        assert "auth_basic" not in content
+        assert "proxy_pass" in content
+
     def test_render_nginx_hostname_format(self, tmp_path):
         out = str(tmp_path / "out.conf")
         template_engine.render_nginx_conf(
@@ -621,7 +633,24 @@ class TestNginxConverter:
         out = convert_nginx(_SAMPLE_NGINX_CONF)
         assert "proxy_set_header Host $host;" in out
 
-    def test_convert_no_auth_basic_untouched_when_absent(self):
+    def test_convert_auth_basic_injected_when_absent(self):
+        """When proxy_pass exists but auth_basic is absent, auth_basic lines are injected."""
+        from lib.nginx_converter import convert_nginx
+        conf = (
+            "server {\n"
+            "    listen 80;\n"
+            "    server_name example.com;\n"
+            "    location / {\n"
+            "        proxy_pass http://myapp-web:80;\n"
+            "    }\n"
+            "}\n"
+        )
+        out = convert_nginx(conf)
+        assert 'auth_basic "{{ service_name }} - {{ user_name }}";' in out
+        assert "auth_basic_user_file {{ htpasswd_path }};" in out
+
+    def test_convert_no_auth_basic_no_proxy_pass_edge_case(self):
+        """A conf with neither proxy_pass nor auth_basic is left without auth_basic."""
         from lib.nginx_converter import convert_nginx
         conf = "server { listen 80; server_name example.com; }\n"
         out = convert_nginx(conf)

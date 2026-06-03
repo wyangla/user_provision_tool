@@ -133,7 +133,8 @@ def register_user(
     htpasswd_out: str | None = None
     if nginx_template:
         nginx_out = str(nginx_dir / f"{service_name}.user-{user_name}.{label}.nginx.conf")
-        htpasswd_out = str(nginx_dir / f"{service_name}.user-{user_name}.{label}.htpasswd")
+        if passwd_hash:
+            htpasswd_out = str(nginx_dir / f"{service_name}.user-{user_name}.{label}.htpasswd")
 
     # --- Registry entry ---
     entry: dict[str, Any] = {
@@ -168,14 +169,13 @@ def register_user(
     )
 
     # --- Render nginx conf + htpasswd ---
-    if nginx_template and nginx_out and htpasswd_out:
-        if passwd_hash:
+    if nginx_template and nginx_out:
+        if htpasswd_out:
             auth.write_htpasswd_file(htpasswd_out, user_name, passwd_hash)
-        htpasswd_render = htpasswd_out if passwd_hash else ""
         template_engine.render_nginx_conf(
             nginx_template, nginx_out,
             user_name, service_name, label,
-            domain, htpasswd_render,
+            domain, htpasswd_out or "",
         )
 
     # --- Start containers ---

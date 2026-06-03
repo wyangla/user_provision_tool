@@ -80,7 +80,7 @@ class RegisterRequest(BaseModel):
     env_file_path: str | None = None
     label: str = "0"
     domain: str = "localhost"
-    passwd: str = ""
+    passwd: str = "123456"
     volumes: dict[str, str] = {}
 
     @field_validator("user_name", "service_name")

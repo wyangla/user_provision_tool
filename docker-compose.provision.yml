@@ -1,6 +1,7 @@
 services:
   provision-api:
     build: ./user_provision_tool
+    container_name: provision-api
     ports:
       - "${PROVISION_API_PORT:-8765}:8000"
     volumes:
@@ -23,10 +24,10 @@ services:
     volumes:
       # Same-path bind-mount so htpasswd paths in generated confs resolve correctly
       - ${PROVISION_DIR}:${PROVISION_DIR}:ro
-      - ./user_provision_tool/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
+      - ./user_provision_tool/nginx.provision.conf:/etc/nginx/nginx.provision.conf:ro
     environment:
       - GENERATED_DIR=${PROVISION_DIR}/generated
     # envsubst substitutes only $GENERATED_DIR; all nginx $variables are left intact
     command: >
-      /bin/sh -c "envsubst '$$GENERATED_DIR' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf && nginx -g 'daemon off;'"
+      /bin/sh -c "envsubst '$$GENERATED_DIR' < /etc/nginx/nginx.provision.conf > /etc/nginx/nginx.conf && nginx -g 'daemon off;'"
     restart: unless-stopped

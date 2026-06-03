@@ -424,12 +424,13 @@ fi
 # Test 13: POST /users with compose_file_path (plain file — auto-converted)
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- Test 13: POST /users with compose_file_path (auto-conversion) ---"
+echo "--- Test 13: POST /users with compose_file_path + nginx_conf_file_path, passwd='' ---"
 REGISTER_BODY_FC=$(cat <<EOF
 {
   "user_name": "fileuser",
   "service_name": "myapp",
   "compose_file_path": "${PROVISION_DIR}/templates/docker-compose.plain.yml",
+  "nginx_conf_file_path": "${PROVISION_DIR}/templates/myapp.plain.nginx.conf",
   "label": "0",
   "domain": "localhost",
   "passwd": "",
@@ -449,6 +450,35 @@ if [ "$fc_status" = "registered" ]; then
 else
     fail "POST /users with compose_file_path failed: $fc_resp"
 fi
+
+# passwd="" → htpasswd_path must be null in response
+fc_htpasswd=$(echo "$fc_resp" | python3 -c "import sys,json; e=json.load(sys.stdin)['entry']; print(e.get('htpasswd_path') or 'null')" 2>/dev/null || echo "err")
+if [ "$fc_htpasswd" = "null" ]; then
+    pass "passwd='' → htpasswd_path is null in registry"
+else
+    fail "Expected htpasswd_path=null for empty passwd, got: $fc_htpasswd"
+fi
+
+# No .htpasswd file should exist on disk
+FC_HTPASSWD_FILE="${PROVISION_DIR}/generated/myapp.user-fileuser.0.htpasswd"
+if [ ! -f "$FC_HTPASSWD_FILE" ]; then
+    pass "passwd='' → no .htpasswd file created on disk"
+else
+    fail "Unexpected .htpasswd file found: $FC_HTPASSWD_FILE"
+fi
+
+# Rendered nginx conf must not contain auth_basic directives
+FC_NGINX_CONF="${PROVISION_DIR}/generated/myapp.user-fileuser.0.nginx.conf"
+if [ -f "$FC_NGINX_CONF" ]; then
+    if grep -q "auth_basic" "$FC_NGINX_CONF"; then
+        fail "passwd='' → nginx conf should have no auth_basic, but found one"
+    else
+        pass "passwd='' → nginx conf has no auth_basic directives"
+    fi
+else
+    fail "Nginx conf not found at: $FC_NGINX_CONF"
+fi
+
 # Clean up fileuser so it doesn't affect subsequent runs
 curl -sf -X DELETE "$API_URL/users/fileuser/services/myapp/0" >/dev/null 2>&1 || true
 
@@ -479,6 +509,75 @@ if [ "$both_src_http" = "422" ]; then
 else
     fail "Expected 422 when both compose sources provided, got: $both_src_http"
 fi
+
+# ---------------------------------------------------------------------------
+# Test 16: Default passwd (123456) → htpasswd generated, nginx conf has auth_basic
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 16: Default passwd → htpasswd generated + nginx conf has auth_basic ---"
+mkdir -p "${PROVISION_DIR}/user-data/nginxuser/app" "${PROVISION_DIR}/user-data/nginxuser/db"
+REGISTER_BODY_NX=$(cat <<EOF
+{
+  "user_name": "nginxuser",
+  "service_name": "myapp",
+  "compose_template_path": "${PROVISION_DIR}/templates/docker-compose.template.yml.j2",
+  "nginx_conf_template_path": "${PROVISION_DIR}/templates/myapp.template.nginx.conf.j2",
+  "label": "0",
+  "domain": "localhost",
+  "volumes": {
+    "app_data": "${PROVISION_DIR}/user-data/nginxuser/app",
+    "db_data":  "${PROVISION_DIR}/user-data/nginxuser/db"
+  }
+}
+EOF
+)
+nx_resp=$(curl -sf -X POST "$API_URL/users" \
+    -H "Content-Type: application/json" \
+    -d "$REGISTER_BODY_NX")
+nx_status=$(echo "$nx_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
+if [ "$nx_status" = "registered" ]; then
+    pass "Default passwd registration: nginxuser/myapp/0 registered"
+else
+    fail "Default passwd registration failed: $nx_resp"
+fi
+
+# htpasswd_path must be non-null in response
+nx_htpasswd=$(echo "$nx_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['entry'].get('htpasswd_path') or 'null')" 2>/dev/null || echo "null")
+if [ "$nx_htpasswd" != "null" ] && [ "$nx_htpasswd" != "" ]; then
+    pass "Default passwd → htpasswd_path is set in registry: $nx_htpasswd"
+else
+    fail "Expected htpasswd_path to be set, got: $nx_htpasswd"
+fi
+
+# .htpasswd file must exist on disk
+NX_HTPASSWD_FILE="${PROVISION_DIR}/generated/myapp.user-nginxuser.0.htpasswd"
+if [ -f "$NX_HTPASSWD_FILE" ]; then
+    pass "Default passwd → .htpasswd file created on disk"
+    # First line must look like a bcrypt hash (nginxuser:$2...)
+    first_line=$(head -1 "$NX_HTPASSWD_FILE")
+    if echo "$first_line" | grep -qE "^nginxuser:\\\$2"; then
+        pass "Default passwd → .htpasswd contains bcrypt hash for nginxuser"
+    else
+        fail "Unexpected .htpasswd content: $first_line"
+    fi
+else
+    fail ".htpasswd file not found at: $NX_HTPASSWD_FILE"
+fi
+
+# Rendered nginx conf must contain auth_basic directives
+NX_NGINX_CONF="${PROVISION_DIR}/generated/myapp.user-nginxuser.0.nginx.conf"
+if [ -f "$NX_NGINX_CONF" ]; then
+    if grep -q "auth_basic" "$NX_NGINX_CONF" && grep -q "auth_basic_user_file" "$NX_NGINX_CONF"; then
+        pass "Default passwd → nginx conf has auth_basic directives"
+    else
+        fail "Default passwd → nginx conf missing auth_basic (got: $(cat "$NX_NGINX_CONF"))"
+    fi
+else
+    fail "Nginx conf not found at: $NX_NGINX_CONF"
+fi
+
+# Clean up
+curl -sf -X DELETE "$API_URL/users/nginxuser/services/myapp/0" >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
 # Results

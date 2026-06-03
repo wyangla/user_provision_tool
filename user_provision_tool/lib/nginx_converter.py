@@ -63,6 +63,17 @@ def convert_nginx(text: str, service_name_hint: str = "") -> str:
         text,
     )
 
+    # If no auth_basic block exists at all, inject one before the first proxy_pass
+    if not re.search(r'[ \t]*auth_basic\b', text):
+        def _inject_auth(m: re.Match) -> str:
+            indent = re.match(r'^([ \t]*)', m.group(0)).group(1)
+            auth_lines = (
+                indent + 'auth_basic "{{ service_name }} - {{ user_name }}";\n' +
+                indent + 'auth_basic_user_file {{ htpasswd_path }};\n'
+            )
+            return auth_lines + m.group(0)
+        text = re.sub(r'[ \t]*proxy_pass[ \t]+\S+;', _inject_auth, text, count=1)
+
     # proxy_pass — rewrite container-name part when prefix matches service_name_hint
     if service_name_hint:
         hint_esc = re.escape(service_name_hint)

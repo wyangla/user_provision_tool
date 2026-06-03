@@ -113,6 +113,45 @@ def registered_alice(
     return entry
 
 
+@pytest.fixture()
+def registered_alice_no_passwd(
+    tmp_path: Path,
+    mock_docker: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict:
+    """Run cli.register for alice with an empty password and return the registry entry."""
+    import shutil
+    import cli.register as reg_script
+
+    compose_tpl = "docker-compose.template.yml.j2"
+    nginx_tpl = "myapp.template.nginx.conf.j2"
+    shutil.copy(FIXTURES_DIR / compose_tpl, tmp_path / compose_tpl)
+    shutil.copy(FIXTURES_DIR / nginx_tpl, tmp_path / nginx_tpl)
+
+    # Empty string → no htpasswd
+    monkeypatch.setattr("getpass.getpass", lambda prompt="": "")
+    monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+
+    sys_argv = [
+        "cli/register.py",
+        "-u", "alice",
+        "-sn", "myapp",
+        "-pr", str(tmp_path),
+        "-tc", compose_tpl,
+        "-tn", nginx_tpl,
+        "-l", "0",
+        "-d", "example.com",
+        "-v", "app_data=/srv/alice/app",
+        "-v", "db_data=/srv/alice/db",
+    ]
+    with patch.object(sys, "argv", sys_argv):
+        reg_script.main()
+
+    entry = reg_mod.get_user_service("alice", "myapp", "0")
+    assert entry is not None, "Registration did not write registry entry"
+    return entry
+
+
 # ---------------------------------------------------------------------------
 # E2E: Registration
 # ---------------------------------------------------------------------------
@@ -343,6 +382,35 @@ class TestE2ERemoval:
             with pytest.raises(SystemExit) as exc:
                 rem_script.main()
         assert exc.value.code != 0
+
+
+# ---------------------------------------------------------------------------
+# E2E: No-password registration
+# ---------------------------------------------------------------------------
+
+class TestE2ENoPassword:
+    """When passwd is explicitly empty: no htpasswd file, htpasswd_path is None,
+    and the rendered nginx conf contains no auth_basic directives."""
+
+    def test_htpasswd_path_is_null(self, registered_alice_no_passwd):
+        assert registered_alice_no_passwd["htpasswd_path"] is None
+
+    def test_htpasswd_file_not_created(self, registered_alice_no_passwd, tmp_path):
+        # htpasswd_path is None, so no file should exist in the generated dir
+        import glob
+        htpasswd_files = glob.glob(str(tmp_path / "*.htpasswd"))
+        assert htpasswd_files == []
+
+    def test_nginx_conf_has_no_auth_basic(self, registered_alice_no_passwd):
+        nginx_path = Path(registered_alice_no_passwd["nginx_conf_path"])
+        assert nginx_path.exists()
+        content = nginx_path.read_text()
+        assert "auth_basic" not in content
+
+    def test_nginx_conf_still_has_proxy_pass(self, registered_alice_no_passwd):
+        nginx_path = Path(registered_alice_no_passwd["nginx_conf_path"])
+        content = nginx_path.read_text()
+        assert "proxy_pass" in content
 
 
 # ---------------------------------------------------------------------------

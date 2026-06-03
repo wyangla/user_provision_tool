@@ -178,5 +178,8 @@ def render_nginx_conf(
         "htpasswd_path": htpasswd_path,
     }
     rendered = env.get_template(tpl_name).render(**ctx)
+    if not htpasswd_path:
+        # Strip auth_basic directives — no password was set for this user
+        rendered = re.sub(r'[ \t]*auth_basic[^\n]*\n', '', rendered)
     with open(output_path, "w") as f:
         f.write(rendered)
