@@ -65,13 +65,14 @@ user_provision_tool/
 │   ├── compose_converter.py       # Plain docker-compose.yml → Jinja2 template
 │   └── nginx_converter.py         # Plain nginx conf → Jinja2 template
 │
-├── source_projects/               # Source trees (Dockerfiles, templates, rendered compose)
+├── source_projects/               # SOURCE_PROJECTS_DIR = $PROVISION_DIR/source_projects
+│   │                              # Bare project_root name "myapp" → source_projects/myapp/
 │   └── {project}/
 │       ├── Dockerfile
 │       ├── docker-compose.{project}.yml.j2        # compose template
 │       └── docker-compose.user-{user}.{label}.yml # rendered per-user compose
 │
-├── generated/                     # Runtime output for nginx/auth state (auto-created)
+├── generated/                     # GENERATED_DIR = $PROVISION_DIR/generated (auto-created)
 │   ├── user_registry.yml          # Managed state file
 │   ├── {svc}.user-{user}-{label}.nginx.conf
 │   └── {svc}.user-{user}-{label}.htpasswd
@@ -198,7 +199,7 @@ Input: user_name, service_name, label
 2. **`.j2` template extension** — compose and nginx templates use the `.j2` suffix so YAML linters do not flag Jinja2 placeholders as syntax errors.
 3. **Two placeholder types in templates** — `{{ var }}` is resolved by Jinja2 at render time; `${ENV_VAR}` is passed through as literal text and resolved by `docker compose` at runtime via `--env-file`.
 4. **Docker socket pattern** — the provision-api container mounts `/var/run/docker.sock` and runs `docker compose` without `sudo`. No Docker daemon is installed inside the container; only the CLI binary is present.
-5. **Same-path bind mount** — `${PROVISION_DIR}:${PROVISION_DIR}` ensures the absolute paths written into generated compose files are valid on the host where the Docker daemon runs.
+5. **Same-path bind mount** — `${PROVISION_DIR}:${PROVISION_DIR}` ensures the absolute paths written into generated compose files are valid on the host where the Docker daemon runs. It also means a bare `project_root` name like `"myapp"` resolves to `SOURCE_PROJECTS_DIR/myapp` (`$PROVISION_DIR/source_projects/myapp` by default) — the same absolute path both inside the container and on the host.
 6. **`passlib.hash.bcrypt`** — passwords are hashed with `bcrypt.using(rounds=12).hash()`; hashes are stored in `user_registry.yml` and written into `.htpasswd` files for nginx basic auth.
 7. **`user_registry.yml` as source of truth** — `cli/status.py` and `GET /users` cross-reference live `docker ps` output against registry entries to compute per-service health.
 8. **Docker Compose project isolation** — every `compose_up`, `compose_down`, and `compose_build` call passes `--project-name {network_name}`. Because all rendered compose files share the same source directory, omitting this would cause Compose to infer the same project name for all users and tear down one user's containers when starting another's.

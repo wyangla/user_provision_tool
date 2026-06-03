@@ -36,12 +36,12 @@ Liveness probe — does not touch Docker.
 |---|---|---|---|
 | `user_name` | string | ✓ | Alphanumeric + underscore |
 | `service_name` | string | ✓ | Alphanumeric + underscore |
-| `project_root` | string | — | Base directory for this service. Accepts a bare name (`"myapp"`), relative path, or absolute path. A bare name resolves to `SOURCE_PROJECTS_DIR/myapp`. Equivalent to `-pr` in the CLI |
-| `compose_file_path` | string | † | Path to a **plain** `docker-compose.yml` inside the container; auto-converted to a `.j2` template on every registration (manual edits to the generated `.j2` will be overwritten) |
-| `compose_template_path` | string | † | Path to an existing `.j2` compose template (use instead of `compose_file_path` when you need a hand-crafted template) |
-| `nginx_conf_file_path` | string | — | Path to a **plain** nginx conf file; auto-converted to a `.j2` template |
-| `nginx_conf_template_path` | string | — | Path to an existing `.j2` nginx conf template (use instead of `nginx_conf_file_path`) |
-| `env_file_path` | string | — | Absolute path to a `.env` file for Docker Compose variable substitution |
+| `project_root` | string | — | Base directory for this service. Accepts a **bare name** (`"myapp"`), a relative path, or an absolute path. A bare name (no `/`, doesn't exist as a dir) resolves to `SOURCE_PROJECTS_DIR/myapp` — which is `$PROVISION_DIR/source_projects/myapp` by default. Equivalent to `-pr` in the CLI. Returns `404` if the resolved directory does not exist. |
+| `compose_file_path` | string | † | Filename (when `project_root` set) or absolute path inside the container to a **plain** `docker-compose.yml`; auto-converted to a `.j2` template on every registration |
+| `compose_template_path` | string | † | Filename (when `project_root` set) or absolute path inside the container to an existing `.j2` compose template |
+| `nginx_conf_file_path` | string | — | Filename (when `project_root` set) or absolute path inside the container to a **plain** nginx conf; auto-converted to a `.j2` template |
+| `nginx_conf_template_path` | string | — | Filename (when `project_root` set) or absolute path inside the container to an existing `.j2` nginx conf template |
+| `env_file_path` | string | — | Filename (when `project_root` set) or absolute path inside the container to a `.env` file for Docker Compose variable substitution |
 | `label` | string | — | Digits only; default `"0"` |
 | `domain` | string | — | Domain for nginx `server_name`; default `"localhost"` |
 | `passwd` | string | — | Plain-text password; default `"123456"`. Hashed with bcrypt before storage. Pass `""` to disable auth entirely (no `.htpasswd` written, `auth_basic` lines stripped from nginx conf) |
@@ -83,15 +83,15 @@ Liveness probe — does not touch Docker.
 
 > **Note on `htpasswd_path`**: this field is `null` in the response when `passwd` is empty (no-auth mode). When a password is provided, it points to the written `.htpasswd` file.
 
-> **Output locations**: the rendered compose file is written into the same directory as the
-> `compose_template_path` (the source project root), so that `build: .` references resolve
-> correctly. Nginx conf and `.htpasswd` files are written into `GENERATED_DIR`.
+> **Path resolution**: when `project_root` is given, all relative file-path fields are resolved against it. Without `project_root`, every path field must be an **absolute path inside the container** (e.g. `/provision/source_projects/myapp/docker-compose.yml` when `PROVISION_DIR=/provision`).
+>
+> **Output locations**: the rendered compose file is written into the resolved project root directory, so that `build: .` references resolve correctly. Nginx conf and `.htpasswd` files are always written into `GENERATED_DIR` (`$PROVISION_DIR/generated` by default).
 
 **Error codes**
 
 | Code | Cause |
 |---|---|
-| `404` | Template file not found inside the container |
+| `404` | Template/env file not found, or bare `project_root` not found under `SOURCE_PROJECTS_DIR` |
 | `409` | The `user_name` + `service_name` + `label` combination is already registered |
 | `422` | Validation error on `user_name`, `service_name`, or `label` format |
 | `500` | `docker compose up` failed; error message includes stderr output for diagnosis |

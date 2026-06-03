@@ -22,7 +22,7 @@ Start a user's containers from a Jinja2 compose template.
 |---|---|---|---|
 | `--user-name` | `-u` | ✓ | User name (`[a-zA-Z0-9_]+`) |
 | `--service-name` | `-sn` | ✓ | Service name (`[a-zA-Z0-9_]+`) |
-| `--project-root` | `-pr` | ✓ | Project root directory; all filenames are resolved relative to this path |
+| `--project-root` | `-pr` | ✓ | Project root directory; all filenames are resolved relative to this path. Accepts a **bare name** (`myapp`), a relative path, or an absolute path. A bare name (no `/`, does not exist as a dir) resolves to `$SOURCE_PROJECTS_DIR/myapp` — which is `$PROVISION_DIR/source_projects/myapp` by default; override via the `SOURCE_PROJECTS_DIR` env var. Returns an error if the resolved directory does not exist. |
 | `--compose-template` | `-tc` | ✓¹ | Filename of an existing `.j2` compose template inside project root |
 | `--compose-file` | `-fc` | ✓¹ | Filename of a plain `docker-compose.yml` inside project root; auto-converted to `.j2` |
 | `--nginx-template` | `-tn` | — | Filename of an existing `.j2` nginx conf template inside project root |
@@ -59,7 +59,17 @@ parse args
 ### Example
 
 ```bash
-# Using a pre-made Jinja2 template
+# Simplest: bare name as project root (resolves to SOURCE_PROJECTS_DIR/myapp = $PROVISION_DIR/source_projects/myapp)
+python cli/register.py \
+  -u alice \
+  -sn myapp \
+  -pr myapp \
+  -fc docker-compose.yml \
+  -fn nginx.conf \
+  -e .env \
+  -d example.com
+
+# Using a pre-made Jinja2 template with explicit full path
 python cli/register.py \
   -u alice \
   -sn myapp \
@@ -72,7 +82,7 @@ python cli/register.py \
   -d example.com \
   -l 0
 
-# Using a plain compose file (auto-converted to .j2 on first use)
+# Using a plain compose file (auto-converted to .j2 on first use) with full path
 python cli/register.py \
   -u alice \
   -sn myapp \

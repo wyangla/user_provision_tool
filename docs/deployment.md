@@ -69,7 +69,8 @@ services:
     environment:
       - GENERATED_DIR=${PROVISION_DIR}/generated        # nginx conf, htpasswd, registry
       - USER_DATA_DIR=${PROVISION_DIR}/user_data         # auto-created per-user volume dirs
-      - SOURCE_PROJECTS_DIR=${PROVISION_DIR}/source_projects  # operator repo drop zone
+      - SOURCE_PROJECTS_DIR=${PROVISION_DIR}/source_projects  # operator repo drop zone; bare
+                                                              # project_root names resolve here
       - REGISTRY_FILE=${PROVISION_DIR}/generated/user_registry.yml
       - NGINX_CONTAINER=provision-nginx          # which container to connect/reload
       - DOCKER_OPS_LOG=${PROVISION_DIR}/generated/docker_ops.log  # optional debug log
@@ -191,10 +192,10 @@ docker compose -f docker-compose.provision.yml down
 ```
 PROVISION_DIR/
 ├── source_projects/              ← your service source trees (bind-mounted same-path)
-│   └── myapp/
+│   └── myapp/                        ← bare project_root "myapp" resolves here
 │       ├── Dockerfile
-│       ├── docker-compose.myapp.yml.j2    ← compose template (you provide)
-│       ├── myapp.nginx.conf.j2            ← nginx template   (you provide)
+│       ├── docker-compose.myapp.yml.j2    ← compose template (you provide, or auto-generated)
+│       ├── myapp.nginx.conf.j2            ← nginx template   (you provide, or auto-generated)
 │       ├── myapp.env                      ← runtime secrets   (you provide)
 │       └── docker-compose.user-alice.0.yml ← rendered per-user compose (written by tool)
 │
@@ -210,6 +211,11 @@ PROVISION_DIR/
     ├── myapp.user-alice.0.nginx.conf
     └── myapp.user-alice.0.htpasswd
 ```
+
+> **Path note**: `source_projects/` inside the container is the same absolute path on the
+> host because of the same-path bind mount (`${PROVISION_DIR}:${PROVISION_DIR}`). When you
+> pass `project_root: "myapp"` (bare name) to the API or `-pr myapp` to the CLI, it resolves
+> to `SOURCE_PROJECTS_DIR/myapp` = `$PROVISION_DIR/source_projects/myapp` on both sides.
 
 ---
 

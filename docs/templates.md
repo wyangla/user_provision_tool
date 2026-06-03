@@ -141,7 +141,11 @@ tool can generate one automatically.
 
 **Via `register.py` flags** (convert + register in one step):
 ```bash
-# -fc: convert docker-compose.yml → .yml.j2, then register
+# Simplest: bare project_root name (resolves to $PROVISION_DIR/source_projects/myapp)
+python cli/register.py -pr myapp \
+  -fc docker-compose.yml -fn nginx.conf -u alice -sn myapp ...
+
+# Full path when the project is outside SOURCE_PROJECTS_DIR
 python cli/register.py -pr /srv/provision/source_projects/myapp \
   -fc docker-compose.yml -fn nginx.conf -u alice -sn myapp ...
 ```
@@ -185,7 +189,7 @@ The converters apply these substitutions:
 There is no enforced naming convention, but the recommended pattern is:
 
 ```
-source_projects/{service_name}/
+source_projects/{service_name}/    ← bare project_root name = SOURCE_PROJECTS_DIR/{service_name}
   docker-compose.{service_name}.yml.j2   ← compose template
   {service_name}.nginx.conf.j2           ← nginx conf template
   {service_name}.env                     ← runtime secrets (.env)
