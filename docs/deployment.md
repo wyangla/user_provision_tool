@@ -256,3 +256,14 @@ FROM python:3.13-slim
   ├─ COPY lib/ cli/ api.py
   └─ CMD [".venv/bin/uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
+
+---
+
+## VS Code AI Skill
+
+A [provision-api skill](../skills/provision-api/SKILL.md) is available for AI-assisted
+setup. It provides:
+
+- Ready-to-use curl command snippets for the REST API
+- Templates for `docker-compose.yml` and `nginx.conf` when a target repo has only a Dockerfile
+- Template variable reference for writing `.j2` templates

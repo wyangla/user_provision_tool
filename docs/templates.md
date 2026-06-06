@@ -199,3 +199,12 @@ source_projects/{service_name}/    ← bare project_root name = SOURCE_PROJECTS_
 This layout keeps all source files together so that `build: .` in compose templates
 resolves to the correct directory, and the rendered per-user compose file lands next to
 the Dockerfile.
+
+---
+
+## VS Code AI Skill
+
+The [provision-api skill](../skills/provision-api/SKILL.md) includes ready-to-copy templates
+for `docker-compose.yml` and `nginx.conf` when setting up a new service — fill in two
+placeholders and the auto-converter handles the rest. It also provides a full variable
+reference and curl command cheat-sheet for the REST API.

@@ -194,6 +194,7 @@ flowchart LR
 | [deployment.md](docs/deployment.md) | Running in production, environment variables |
 | [testing.md](docs/testing.md) | Running unit, e2e, and integration tests |
 | [template_rendering_workflow.md](docs/template_rendering_workflow.md) | Step-by-step rendering pipeline |
+| [SKILL.md](skills/provision-api/SKILL.md) | VS Code AI skill — curl reference, compose & nginx templates for new services |
 
 ---
 

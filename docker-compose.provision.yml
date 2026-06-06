@@ -25,7 +25,7 @@ services:
     volumes:
       # Same-path bind-mount so htpasswd paths in generated confs resolve correctly
       - ${PROVISION_DIR}:${PROVISION_DIR}:ro
-      - ./user_provision_tool/nginx.provision.conf:/etc/nginx/nginx.provision.conf:ro
+      - ./nginx.provision.conf:/etc/nginx/nginx.provision.conf:ro
     environment:
       - GENERATED_DIR=${PROVISION_DIR}/generated
     # envsubst substitutes only $GENERATED_DIR; all nginx $variables are left intact
