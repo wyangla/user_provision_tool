@@ -4,7 +4,7 @@
 #   pruser3
 #   myapp
 #   0
-#   {'app_data': '/tmp/pytest-of-wyan2026/pytest-114/test_no_project_root_absolute_0/user_data/pruser3/myapp/0/app_data', 'db_data': '/tmp/pytest-of-wyan2026/pytest-114/test_no_project_root_absolute_0/user_data/pruser3/myapp/0/db_data', 'db_socket': '/tmp/pytest-of-wyan2026/pytest-114/test_no_project_root_absolute_0/user_data/pruser3/myapp/0/db_socket'}           -> dict: template_key -> host_path
+#   {'app_data': '/tmp/pytest-of-wyan2026/pytest-121/test_no_project_root_absolute_0/user_data/pruser3/myapp/0/app_data', 'db_data': '/tmp/pytest-of-wyan2026/pytest-121/test_no_project_root_absolute_0/user_data/pruser3/myapp/0/db_data', 'db_socket': '/tmp/pytest-of-wyan2026/pytest-121/test_no_project_root_absolute_0/user_data/pruser3/myapp/0/db_socket'}           -> dict: template_key -> host_path
 
 services:
   web:
@@ -13,7 +13,7 @@ services:
     ports:
       - "0:80"
     volumes:
-      - /tmp/pytest-of-wyan2026/pytest-114/test_no_project_root_absolute_0/user_data/pruser3/myapp/0/app_data:/usr/share/nginx/html:ro
+      - /tmp/pytest-of-wyan2026/pytest-121/test_no_project_root_absolute_0/user_data/pruser3/myapp/0/app_data:/usr/share/nginx/html:ro
     environment:
       - SERVICE_NAME=myapp
       - USER_NAME=pruser3
@@ -31,7 +31,7 @@ services:
       - POSTGRES_USER=pruser3
       - POSTGRES_PASSWORD=changeme
     volumes:
-      - /tmp/pytest-of-wyan2026/pytest-114/test_no_project_root_absolute_0/user_data/pruser3/myapp/0/db_data:/var/lib/postgresql/data
+      - /tmp/pytest-of-wyan2026/pytest-121/test_no_project_root_absolute_0/user_data/pruser3/myapp/0/db_data:/var/lib/postgresql/data
       - db_socket:/var/run/postgresql
     networks:
       - myapp-user_pruser3-0

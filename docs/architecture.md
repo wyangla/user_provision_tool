@@ -63,7 +63,8 @@ user_provision_tool/
 │   ├── docker_ops.py              # Subprocess wrappers for docker compose
 │   ├── provisioner.py             # Shared registration / removal / rebuild workflow
 │   ├── compose_converter.py       # Plain docker-compose.yml → Jinja2 template
-│   └── nginx_converter.py         # Plain nginx conf → Jinja2 template
+│   ├── nginx_converter.py         # Plain nginx conf → Jinja2 template
+│   └── task_manager.py            # Async task pool (ThreadPoolExecutor) for background Docker ops
 │
 ├── source_projects/               # SOURCE_PROJECTS_DIR = $PROVISION_DIR/source_projects
 │   │                              # Bare project_root name "myapp" → source_projects/myapp/
@@ -79,9 +80,12 @@ user_provision_tool/
 │
 └── tests/
     ├── conftest.py                # Shared pytest fixtures
-    ├── test_unit.py               # Unit tests (90)
-    ├── test_e2e.py                # End-to-end pytest tests (36)
-    ├── test_integration.sh        # Full Docker integration test (17 tests · 28 assertions)
+│   ├── test_unit.py               # Unit tests
+│   ├── test_e2e.py                # End-to-end pytest tests
+│   ├── test_proxy_support.py      # Proxy / --build-arg tests
+│   ├── test_task_manager.py       # Async task pool tests
+│   ├── test_integration.sh        # Full Docker integration test
+│   ├── mock_proxy.py              # Forward HTTP/HTTPS proxy for integration tests
     └── fixtures/
         ├── docker-compose.template.yml.j2
         ├── myapp.template.nginx.conf.j2
@@ -99,17 +103,18 @@ user_provision_tool/
 | `registry.py` | Load/save `user_registry.yml`; add/remove/query entries by user+service+label |
 | `template_engine.py` | Extract template volumes; render compose and nginx files via Jinja2; copy `.env` alongside output |
 | `auth.py` | `getpass` prompt; bcrypt hash via `passlib.hash.bcrypt`; write `.htpasswd` file |
-| `docker_ops.py` | `compose_up`, `compose_down`, `compose_build`, `docker_ps`, `network_connect`, `network_disconnect`, `nginx_reload` wrappers; captures stdout/stderr; error messages include stderr detail; writes to `DOCKER_OPS_LOG` file when env var is set |
-| `provisioner.py` | Shared workflow for register/remove/rebuild; both `api.py` and `cli/` delegate here |
+| `docker_ops.py` | `compose_up`, `compose_down`, `compose_build`, `docker_ps`, `network_connect`, `network_disconnect`, `nginx_reload` wrappers; real-time stdout/stderr via `subprocess.Popen` + threading; supports `--build-arg` for proxy; writes to `DOCKER_OPS_LOG` file when env var is set |
+| `provisioner.py` | Shared workflow for register/remove/rebuild; supports `build_args` (proxy) passed through to docker_ops; both `api.py` and `cli/` delegate here |
 | `compose_converter.py` | Parse a plain `docker-compose.yml` and emit a Jinja2 `.yml.j2` template; services with named profiles are excluded; `profiles:` key is stripped from kept services |
 | `nginx_converter.py` | Apply regex substitutions to a plain nginx conf and emit a `.j2` template; injects `auth_basic` + `auth_basic_user_file` directives before the first `proxy_pass` if none are already present |
+| `task_manager.py` | In-memory async task pool (`ThreadPoolExecutor`); submit → status → cancel lifecycle; powers `GET /tasks`, `GET /tasks/{id}`, `DELETE /tasks/{id}` endpoints |
 
 ---
 
 ## Module Dependencies
 
 ```
-  api.py                →  provisioner  →  validation, registry, template_engine, auth, docker_ops
+  api.py                →  task_manager → provisioner → validation, registry, template_engine, auth, docker_ops
   cli/register.py       →  provisioner  →  (same)
   cli/remove.py         →  provisioner  →  registry, docker_ops
   cli/rebuild.py        →  provisioner  →  registry, docker_ops

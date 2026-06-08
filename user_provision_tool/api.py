@@ -1,11 +1,19 @@
 """FastAPI service for the user provision tool.
 
 Endpoints:
-  POST   /users                                           register user + start containers
-  DELETE /users/{user_name}/services/{service_name}/{label}   stop + deregister
-  POST   /users/{user_name}/services/{service_name}/{label}/rebuild
+  POST   /users                                           register user + start containers (async → task_id)
+  DELETE /users/{user_name}/services/{service_name}/{label}   stop + deregister (async → task_id)
+  POST   /users/{user_name}/services/{service_name}/{label}/rebuild  (async → task_id)
   GET    /users                                           status of all users
   GET    /users/{user_name}                               status of one user
+  GET    /tasks                                           list all tasks in the pool
+  GET    /tasks/{task_id}                                 query async task status / result
+  DELETE /tasks/{task_id}                                 cancel a pending or running task
+
+Long-running operations (register, rebuild, remove) now return a ``task_id``
+immediately.  Poll ``GET /tasks/{task_id}`` for progress (status, result, error).
+
+For backward compatibility, pass ``?sync=true`` to block until completion.
 
 Environment variables:
   GENERATED_DIR   directory for generated compose/nginx files  (default: ./generated)
@@ -19,7 +27,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, field_validator
 
 # Make lib/ importable when the file sits at the project root
@@ -28,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lib import docker_ops, provisioner, registry, template_engine, validation
 from lib.compose_converter import compose_file_to_template
 from lib.nginx_converter import nginx_file_to_template
+from lib.task_manager import task_manager
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -142,11 +151,14 @@ def health() -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# POST /users  — register
+# POST /users  — register (async by default; ?sync=true to block)
 # ---------------------------------------------------------------------------
 
-@app.post("/users", status_code=201)
-def register_user(req: RegisterRequest) -> dict[str, Any]:
+@app.post("/users", status_code=202)
+def register_user(
+    req: RegisterRequest,
+    sync: bool = Query(False, description="If true, block until registration completes"),
+) -> dict[str, Any]:
     # --- Resolve project_root: bare name → SOURCE_PROJECTS_DIR/{name} ---
     resolved_root: Path | None = None
     if req.project_root:
@@ -205,82 +217,158 @@ def register_user(req: RegisterRequest) -> dict[str, Any]:
             raise HTTPException(404, f"nginx_conf_template_path not found: {nginx_conf_template_path}")
         nginx_template = nginx_conf_template_path
 
-    # --- Delegate to shared provisioner ---
-    try:
-        result = provisioner.register_user(
-            user_name=req.user_name,
-            service_name=req.service_name,
-            label=req.label,
-            compose_template=compose_template,
-            output_dir=Path(compose_template).parent,
-            nginx_output_dir=GENERATED_DIR,
-            volumes=req.volumes or None,
-            user_data_dir=USER_DATA_DIR,
-            passwd=req.passwd,
-            nginx_template=nginx_template,
-            domain=req.domain,
-            env_file=env_file_path,
-            nginx_container=NGINX_CONTAINER,
-            build_args=req.build_args,
-        )
-    except ValueError as e:
-        raise HTTPException(409, str(e))
-    except RuntimeError as e:
-        raise HTTPException(500, f"docker compose up failed: {e}")
+    # --- Build kwargs for provisioner call ---
+    prov_kwargs = dict(
+        user_name=req.user_name,
+        service_name=req.service_name,
+        label=req.label,
+        compose_template=compose_template,
+        output_dir=Path(compose_template).parent,
+        nginx_output_dir=GENERATED_DIR,
+        volumes=req.volumes or None,
+        user_data_dir=USER_DATA_DIR,
+        passwd=req.passwd,
+        nginx_template=nginx_template,
+        domain=req.domain,
+        env_file=env_file_path,
+        nginx_container=NGINX_CONTAINER,
+        build_args=req.build_args,
+    )
 
+    if sync:
+        # Backward-compatible blocking call
+        try:
+            result = provisioner.register_user(**prov_kwargs)
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+        except RuntimeError as e:
+            raise HTTPException(500, f"docker compose up failed: {e}")
+        return {
+            "status": "registered",
+            "entry": result["entry"],
+            "volume_warnings": result["volume_warnings"],
+        }
+
+    # Async: submit task, return task_id immediately
+    task_id = task_manager.submit("register", provisioner.register_user, **prov_kwargs)
     return {
-        "status": "registered",
-        "entry": result["entry"],
-        "volume_warnings": result["volume_warnings"],
+        "task_id": task_id,
+        "status": "pending",
+        "type": "register",
+        "message": f"Registration queued.  Poll GET /tasks/{task_id} for status.",
     }
 
 
 # ---------------------------------------------------------------------------
-# DELETE /users/{user_name}/services/{service_name}/{label}  — remove
+# DELETE /users/{user_name}/services/{service_name}/{label}  — remove (async)
 # ---------------------------------------------------------------------------
 
 @app.delete("/users/{user_name}/services/{service_name}/{label}")
-def remove_user(user_name: str, service_name: str, label: str) -> dict[str, str]:
-    try:
-        provisioner.remove_user(
-            user_name=user_name,
-            service_name=service_name,
-            label=label,
-            nginx_container=NGINX_CONTAINER,
-        )
-    except KeyError as e:
-        raise HTTPException(404, str(e))
-    except RuntimeError as e:
-        raise HTTPException(500, f"docker compose down failed: {e}")
+def remove_user(
+    user_name: str, service_name: str, label: str,
+    sync: bool = Query(False, description="If true, block until removal completes"),
+) -> dict[str, Any]:
+    prov_kwargs = dict(
+        user_name=user_name,
+        service_name=service_name,
+        label=label,
+        nginx_container=NGINX_CONTAINER,
+    )
 
-    return {"status": "removed", "user_name": user_name, "service_name": service_name, "label": label}
+    if sync:
+        try:
+            provisioner.remove_user(**prov_kwargs)
+        except KeyError as e:
+            raise HTTPException(404, str(e))
+        except RuntimeError as e:
+            raise HTTPException(500, f"docker compose down failed: {e}")
+        return {"status": "removed", "user_name": user_name, "service_name": service_name, "label": label}
+
+    task_id = task_manager.submit("remove", provisioner.remove_user, **prov_kwargs)
+    return {
+        "task_id": task_id,
+        "status": "pending",
+        "type": "remove",
+        "message": f"Removal queued.  Poll GET /tasks/{task_id} for status.",
+    }
 
 
 # ---------------------------------------------------------------------------
-# POST /users/{user_name}/services/{service_name}/{label}/rebuild
+# POST /users/{user_name}/services/{service_name}/{label}/rebuild  (async)
 # ---------------------------------------------------------------------------
 
 @app.post("/users/{user_name}/services/{service_name}/{label}/rebuild")
 def rebuild_user(
     user_name: str, service_name: str, label: str,
     req: RebuildRequest = RebuildRequest(),
-) -> dict[str, str]:
-    try:
-        provisioner.rebuild_user(
-            user_name=user_name,
-            service_name=service_name,
-            label=label,
-            no_cache=req.no_cache,
-            build_args=req.build_args,
-        )
-    except KeyError as e:
-        raise HTTPException(404, str(e))
-    except FileNotFoundError as e:
-        raise HTTPException(404, str(e))
-    except RuntimeError as e:
-        raise HTTPException(500, f"rebuild failed: {e}")
+    sync: bool = Query(False, description="If true, block until rebuild completes"),
+) -> dict[str, Any]:
+    prov_kwargs = dict(
+        user_name=user_name,
+        service_name=service_name,
+        label=label,
+        no_cache=req.no_cache,
+        build_args=req.build_args,
+    )
 
-    return {"status": "rebuilt", "user_name": user_name, "service_name": service_name, "label": label}
+    if sync:
+        try:
+            provisioner.rebuild_user(**prov_kwargs)
+        except KeyError as e:
+            raise HTTPException(404, str(e))
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e))
+        except RuntimeError as e:
+            raise HTTPException(500, f"rebuild failed: {e}")
+        return {"status": "rebuilt", "user_name": user_name, "service_name": service_name, "label": label}
+
+    task_id = task_manager.submit("rebuild", provisioner.rebuild_user, **prov_kwargs)
+    return {
+        "task_id": task_id,
+        "status": "pending",
+        "type": "rebuild",
+        "message": f"Rebuild queued.  Poll GET /tasks/{task_id} for status.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /tasks  — list all tasks in the pool
+# ---------------------------------------------------------------------------
+
+@app.get("/tasks")
+def list_tasks() -> dict[str, Any]:
+    tasks = task_manager.list_all()
+    return {
+        "count": len(tasks),
+        "tasks": tasks,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /tasks/{task_id}  — query async task status
+# ---------------------------------------------------------------------------
+
+@app.get("/tasks/{task_id}")
+def get_task_status(task_id: str) -> dict[str, Any]:
+    task = task_manager.get(task_id)
+    if task is None:
+        raise HTTPException(404, f"Task not found: {task_id}")
+    return task
+
+
+# ---------------------------------------------------------------------------
+# DELETE /tasks/{task_id}  — cancel a pending or running task
+# ---------------------------------------------------------------------------
+
+@app.delete("/tasks/{task_id}")
+def cancel_task(task_id: str) -> dict[str, Any]:
+    cancelled = task_manager.cancel(task_id)
+    if not cancelled:
+        task = task_manager.get(task_id)
+        if task is None:
+            raise HTTPException(404, f"Task not found: {task_id}")
+        raise HTTPException(409, f"Task already in terminal state: {task['status']}")
+    return {"task_id": task_id, "status": "cancelled"}
 
 
 # ---------------------------------------------------------------------------

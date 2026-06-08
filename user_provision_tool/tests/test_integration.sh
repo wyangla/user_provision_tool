@@ -220,7 +220,7 @@ REGISTER_BODY=$(cat <<EOF
 EOF
 )
 
-reg_resp=$(curl -sf -X POST "$API_URL/users" \
+reg_resp=$(curl -sf -X POST "$API_URL/users?sync=true" \
     -H "Content-Type: application/json" \
     -d "$REGISTER_BODY")
 
@@ -236,7 +236,7 @@ fi
 # ---------------------------------------------------------------------------
 echo ""
 echo "--- Test 3: POST /users duplicate (expect 409) ---"
-dup_http=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_URL/users" \
+dup_http=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_URL/users?sync=true" \
     -H "Content-Type: application/json" \
     -d "$REGISTER_BODY")
 if [ "$dup_http" = "409" ]; then
@@ -297,7 +297,7 @@ fi
 # ---------------------------------------------------------------------------
 echo ""
 echo "--- Test 6: POST /users/testuser/services/myapp/0/rebuild ---"
-rebuild_resp=$(curl -sf -X POST "$API_URL/users/testuser/services/myapp/0/rebuild" \
+rebuild_resp=$(curl -sf -X POST "$API_URL/users/testuser/services/myapp/0/rebuild?sync=true" \
     -H "Content-Type: application/json" \
     -d '{"no_cache": false}')
 rebuild_status=$(echo "$rebuild_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
@@ -335,7 +335,7 @@ fi
 # ---------------------------------------------------------------------------
 echo ""
 echo "--- Test 8: DELETE /users/testuser/services/myapp/0 ---"
-del_resp=$(curl -sf -X DELETE "$API_URL/users/testuser/services/myapp/0")
+del_resp=$(curl -sf -X DELETE "$API_URL/users/testuser/services/myapp/0?sync=true")
 del_status=$(echo "$del_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
 if [ "$del_status" = "removed" ]; then
     pass "DELETE returned status=removed"
@@ -384,7 +384,7 @@ fi
 echo ""
 echo "--- Test 11: provision-nginx connected to user network ---"
 # Re-register to get a fresh network for the connectivity check
-reg_resp2=$(curl -sf -X POST "$API_URL/users" \
+reg_resp2=$(curl -sf -X POST "$API_URL/users?sync=true" \
     -H "Content-Type: application/json" \
     -d "$REGISTER_BODY")
 reg_status2=$(echo "$reg_resp2" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
@@ -409,7 +409,7 @@ fi
 # ---------------------------------------------------------------------------
 echo ""
 echo "--- Test 12: User network removed after de-registration ---"
-del_resp2=$(curl -sf -X DELETE "$API_URL/users/testuser/services/myapp/0")
+del_resp2=$(curl -sf -X DELETE "$API_URL/users/testuser/services/myapp/0?sync=true")
 sleep 3
 net_exists=$(docker network ls --format '{{.Name}}' 2>/dev/null \
     | grep -c "^${TEST_NETWORK_NAME}$" || true)
@@ -441,7 +441,7 @@ REGISTER_BODY_FC=$(cat <<EOF
 }
 EOF
 )
-fc_resp=$(curl -sf -X POST "$API_URL/users" \
+fc_resp=$(curl -sf -X POST "$API_URL/users?sync=true" \
     -H "Content-Type: application/json" \
     -d "$REGISTER_BODY_FC")
 fc_status=$(echo "$fc_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
@@ -531,7 +531,7 @@ REGISTER_BODY_NX=$(cat <<EOF
 }
 EOF
 )
-nx_resp=$(curl -sf -X POST "$API_URL/users" \
+nx_resp=$(curl -sf -X POST "$API_URL/users?sync=true" \
     -H "Content-Type: application/json" \
     -d "$REGISTER_BODY_NX")
 nx_status=$(echo "$nx_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
@@ -602,7 +602,7 @@ REGISTER_BODY_PR=$(cat <<EOF
 }
 EOF
 )
-pr_resp=$(curl -sf -X POST "$API_URL/users" \
+pr_resp=$(curl -sf -X POST "$API_URL/users?sync=true" \
     -H "Content-Type: application/json" \
     -d "$REGISTER_BODY_PR")
 pr_status=$(echo "$pr_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
@@ -690,7 +690,7 @@ REGISTER_BODY_MPX=$(cat <<EOF
 }
 EOF
 )
-mpx_resp=$(curl -sf -X POST "$API_URL/users" \
+mpx_resp=$(curl -sf -X POST "$API_URL/users?sync=true" \
     -H "Content-Type: application/json" \
     -d "$REGISTER_BODY_MPX")
 mpx_status=$(echo "$mpx_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
@@ -726,7 +726,7 @@ fi
 echo ""
 echo "--- Test 19: Rebuild with override build_args → MockProxy ---"
 OVERRIDE_PROXY="http://127.0.0.1:${MOCK_PROXY_PORT}"
-rebuild_mpx_resp=$(curl -sf -X POST "$API_URL/users/mockpx/services/myapp/0/rebuild" \
+rebuild_mpx_resp=$(curl -sf -X POST "$API_URL/users/mockpx/services/myapp/0/rebuild?sync=true" \
     -H "Content-Type: application/json" \
     -d "{\"no_cache\": true, \"build_args\": {\"HTTP_PROXY\": \"${OVERRIDE_PROXY}\", \"NO_PROXY\": \"localhost\"}}")
 rebuild_mpx_status=$(echo "$rebuild_mpx_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
@@ -757,6 +757,134 @@ rm -f "$MOCK_PROXY_URL_FILE"
 
 # Clean up mockpx
 curl -sf -X DELETE "$API_URL/users/mockpx/services/myapp/0" >/dev/null 2>&1 || true
+
+# ---------------------------------------------------------------------------
+# Test 20: Async register — returns task_id, poll until complete
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 20: Async register → task_id → poll → complete ---"
+mkdir -p "${PROVISION_DIR}/user-data/asynctest/app" "${PROVISION_DIR}/user-data/asynctest/db"
+ASYNC_BODY=$(cat <<EOF
+{
+  "user_name": "asynctest",
+  "service_name": "myapp",
+  "compose_template_path": "${PROVISION_DIR}/templates/docker-compose.template.yml.j2",
+  "label": "0",
+  "domain": "localhost",
+  "passwd": "",
+  "volumes": {
+    "app_data": "${PROVISION_DIR}/user-data/asynctest/app",
+    "db_data":  "${PROVISION_DIR}/user-data/asynctest/db"
+  }
+}
+EOF
+)
+async_resp=$(curl -sf -X POST "$API_URL/users" \
+    -H "Content-Type: application/json" \
+    -d "$ASYNC_BODY")
+async_task_id=$(echo "$async_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['task_id'])" 2>/dev/null || echo "")
+async_type=$(echo "$async_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['type'])" 2>/dev/null || echo "")
+
+if [ -n "$async_task_id" ] && [ "$async_type" = "register" ]; then
+    pass "Async register returned task_id=$async_task_id"
+else
+    fail "Async register did not return task_id: $async_resp"
+fi
+
+# Poll until completed
+async_done=0
+for i in $(seq 1 30); do
+    task_status=$(curl -sf "$API_URL/tasks/$async_task_id")
+    ts=$(echo "$task_status" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
+    echo "  [${i}s] task $async_task_id status=$ts"
+    if [ "$ts" = "completed" ]; then
+        async_done=1
+        echo "  Task result: $(echo "$task_status" | python3 -c "import sys,json; r=json.load(sys.stdin).get('result',''); print(str(r)[:100])" 2>/dev/null || echo "")"
+        pass "Async task $async_task_id completed after ${i}s"
+        break
+    elif [ "$ts" = "failed" ]; then
+        err=$(echo "$task_status" | python3 -c "import sys,json; print(json.load(sys.stdin).get('error',''))" 2>/dev/null || echo "")
+        fail "Async task $async_task_id failed: $err"
+        break
+    fi
+    sleep 1
+done
+if [ "$async_done" -eq 0 ]; then
+    fail "Async task $async_task_id did not complete within 30s (last status=$ts)"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 21: GET /tasks — list all tasks (includes the completed one)
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 21: GET /tasks lists all tasks ---"
+all_tasks=$(curl -sf "$API_URL/tasks")
+task_count=$(echo "$all_tasks" | python3 -c "import sys,json; print(json.load(sys.stdin)['count'])" 2>/dev/null || echo "0")
+# Print a summary table of all tasks
+echo "  Task pool summary:"
+echo "$all_tasks" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+print(f'  {\"TASK ID\":<14} {\"TYPE\":<10} {\"STATUS\":<12} {\"RESULT/ERROR\"}')
+print(f'  {\"-\"*14} {\"-\"*10} {\"-\"*12} {\"-\"*20}')
+for t in data['tasks']:
+    extra = str(t.get('result','') or t.get('error',''))[:30]
+    print(f'  {t[\"task_id\"]:<14} {t[\"type\"]:<10} {t[\"status\"]:<12} {extra}')
+" 2>/dev/null || true
+if [ "$task_count" -ge 1 ]; then
+    pass "GET /tasks returned $task_count task(s)"
+else
+    fail "GET /tasks returned 0 tasks, expected >= 1"
+fi
+
+# Verify our task is in the list
+in_list=$(echo "$all_tasks" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+found = any(t['task_id'] == '$async_task_id' for t in data['tasks'])
+print('yes' if found else 'no')
+" 2>/dev/null || echo "no")
+if [ "$in_list" = "yes" ]; then
+    pass "GET /tasks includes $async_task_id"
+else
+    fail "GET /tasks missing $async_task_id"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 22: DELETE /tasks/{task_id} — cancel a pending task
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 22: Cancel a pending task ---"
+# Submit a task and immediately cancel it
+cancel_body='{"user_name":"cancelme","service_name":"myapp","compose_template_path":"'"${PROVISION_DIR}/templates/docker-compose.template.yml.j2"'","label":"0","volumes":{"app_data":"'"${PROVISION_DIR}/user-data/asynctest/app"'","db_data":"'"${PROVISION_DIR}/user-data/asynctest/db"'"}}'
+cancel_resp=$(curl -sf -X POST "$API_URL/users" \
+    -H "Content-Type: application/json" \
+    -d "$cancel_body")
+cancel_tid=$(echo "$cancel_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['task_id'])" 2>/dev/null || echo "")
+
+if [ -n "$cancel_tid" ]; then
+    cancel_result=$(curl -sf -X DELETE "$API_URL/tasks/$cancel_tid")
+    cancel_status=$(echo "$cancel_result" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
+    if [ "$cancel_status" = "cancelled" ]; then
+        pass "Cancel task $cancel_tid returned status=cancelled"
+    else
+        fail "Cancel task returned unexpected: $cancel_result"
+    fi
+else
+    fail "Could not submit task for cancellation test"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 23: GET /tasks/{task_id} — 404 for nonexistent
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 23: GET /tasks/{nonexistent} returns 404 ---"
+t404_http=$(curl -s -o /dev/null -w "%{http_code}" "$API_URL/tasks/nonexistent999")
+if [ "$t404_http" = "404" ]; then
+    pass "GET /tasks/nonexistent returns 404"
+else
+    fail "Expected 404 for nonexistent task, got: $t404_http"
+fi
 
 # ---------------------------------------------------------------------------
 # Results

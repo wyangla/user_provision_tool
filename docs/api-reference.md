@@ -2,6 +2,11 @@
 
 The provision-api exposes a REST API via FastAPI. By default it listens on port `8765`.
 
+Long-running operations (register, rebuild, remove) are **asynchronous by default** —
+they return a `task_id` immediately and the work runs in a background thread pool.
+Poll `GET /tasks/{task_id}` for progress.  To block until completion (legacy behaviour),
+add `?sync=true` to any mutable endpoint.
+
 ---
 
 ## Endpoints
@@ -9,11 +14,30 @@ The provision-api exposes a REST API via FastAPI. By default it listens on port 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/health` | Liveness probe |
-| `POST` | `/users` | Register a user and start their containers |
+| `POST` | `/users` | Register a user and start their containers (async → `task_id`) |
 | `GET` | `/users` | Status of all registered users |
 | `GET` | `/users/{user_name}` | Status of one user |
-| `DELETE` | `/users/{user_name}/services/{service_name}/{label}` | Stop and deregister a service |
-| `POST` | `/users/{user_name}/services/{service_name}/{label}/rebuild` | Rebuild and restart containers |
+| `DELETE` | `/users/{user_name}/services/{service_name}/{label}` | Stop and deregister a service (async → `task_id`) |
+| `POST` | `/users/{user_name}/services/{service_name}/{label}/rebuild` | Rebuild and restart containers (async → `task_id`) |
+| `GET` | `/tasks` | List all tasks in the pool |
+| `GET` | `/tasks/{task_id}` | Query task status / result |
+| `DELETE` | `/tasks/{task_id}` | Cancel a pending or running task |
+
+---
+
+## Async vs Sync
+
+All three mutable endpoints (`POST /users`, `DELETE /users/...`, `POST .../rebuild`) behave
+differently depending on the `?sync` query parameter:
+
+| Mode | Query | HTTP status | Response body |
+|---|---|---|---|
+| **Async** (default) | _(none)_ | `202 Accepted` | `{"task_id": "...", "status": "pending", "type": "...", "message": "..."}` |
+| **Sync** | `?sync=true` | `201` / `200` | legacy response (`{"status": "registered", ...}` etc.) |
+
+In async mode, errors that can be detected before queuing (validation, not-found, permission)
+return immediately as `4xx`.  Runtime errors (docker build failures, etc.) are stored in the
+task's `error` field and surfaced when you poll `GET /tasks/{task_id}`.
 
 ---
 
@@ -29,6 +53,13 @@ Liveness probe — does not touch Docker.
 ---
 
 ## `POST /users` — Register
+
+Registers a user and starts their isolated service containers.
+
+| Mode | Method | Status | Response |
+|---|---|---|---|
+| Async (default) | `POST /users` | `202` | `{"task_id": "...", "status": "pending"}` |
+| Sync | `POST /users?sync=true` | `201` | `{"status": "registered", "entry": {...}}` |
 
 **Request body**
 
@@ -50,21 +81,40 @@ Liveness probe — does not touch Docker.
 
 > † Exactly one of `compose_file_path` or `compose_template_path` must be provided.
 
-**Example** (simplest: bare service name as `project_root` + filenames)
+**Example — async (default)**
+
+```bash
+curl -X POST http://localhost:8765/users \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user_name": "alice",
+    "service_name": "myapp",
+    "project_root": "myapp",
+    "compose_file_path": "docker-compose.yml",
+    "domain": "example.com",
+    "passwd": "secret"
+  }'
+```
+
+**Response `202`**
 ```json
 {
-  "user_name": "alice",
-  "service_name": "myapp",
-  "project_root": "myapp",
-  "compose_file_path": "docker-compose.yml",
-  "nginx_conf_file_path": "nginx.conf",
-  "env_file_path": ".env",
-  "domain": "example.com",
-  "passwd": "secret"
+  "task_id": "a1b2c3d4e5f6",
+  "status": "pending",
+  "type": "register",
+  "message": "Registration queued.  Poll GET /tasks/a1b2c3d4e5f6 for status."
 }
 ```
 
-**Response `201`**
+**Example — sync (blocking)**
+
+```bash
+curl -X POST "http://localhost:8765/users?sync=true" \
+  -H 'Content-Type: application/json' \
+  -d '{...}'
+```
+
+**Response `201` (sync only)**
 ```json
 {
   "status": "registered",
@@ -82,20 +132,22 @@ Liveness probe — does not touch Docker.
 }
 ```
 
-> **Note on `htpasswd_path`**: this field is `null` in the response when `passwd` is empty (no-auth mode). When a password is provided, it points to the written `.htpasswd` file.
-
-> **Path resolution**: when `project_root` is given, all relative file-path fields are resolved against it. Without `project_root`, every path field must be an **absolute path inside the container** (e.g. `/provision/source_projects/myapp/docker-compose.yml` when `PROVISION_DIR=/provision`).
->
-> **Output locations**: the rendered compose file is written into the resolved project root directory, so that `build: .` references resolve correctly. Nginx conf and `.htpasswd` files are always written into `GENERATED_DIR` (`$PROVISION_DIR/generated` by default).
-
-**Error codes**
+**Error codes (immediate — both modes)**
 
 | Code | Cause |
 |---|---|
 | `404` | Template/env file not found, or bare `project_root` not found under `SOURCE_PROJECTS_DIR` |
-| `409` | The `user_name` + `service_name` + `label` combination is already registered |
 | `422` | Validation error on `user_name`, `service_name`, or `label` format |
-| `500` | `docker compose up` failed; error message includes stderr output for diagnosis |
+
+**Error codes (sync only)**
+
+| Code | Cause |
+|---|---|
+| `409` | The `user_name` + `service_name` + `label` combination is already registered |
+| `500` | `docker compose up` failed; error message includes stderr output |
+
+> In **async mode**, duplicate-registration and runtime errors appear in the task's `error` field
+> (poll `GET /tasks/{task_id}`) rather than as HTTP error responses.
 
 ---
 
@@ -103,23 +155,41 @@ Liveness probe — does not touch Docker.
 
 Runs `docker compose down` then removes the registry entry.
 
-**Response `200`**
+| Mode | Method | Status | Response |
+|---|---|---|---|
+| Async (default) | `DELETE /users/...` | `202` | `{"task_id": "...", "status": "pending"}` |
+| Sync | `DELETE /users/...?sync=true` | `200` | `{"status": "removed", ...}` |
+
+**Example — async**
+```bash
+curl -X DELETE http://localhost:8765/users/alice/services/myapp/0
+```
+
+**Response `202`**
+```json
+{
+  "task_id": "b2c3d4e5f6a7",
+  "status": "pending",
+  "type": "remove",
+  "message": "Removal queued.  Poll GET /tasks/b2c3d4e5f6a7 for status."
+}
+```
+
+**Response `200` (sync only)**
 ```json
 { "status": "removed", "user_name": "alice", "service_name": "myapp", "label": "0" }
 ```
-
-**Error codes**
-
-| Code | Cause |
-|---|---|
-| `404` | No registration found |
-| `500` | `docker compose down` failed |
 
 ---
 
 ## `POST /users/{user_name}/services/{service_name}/{label}/rebuild`
 
 Runs `docker compose build` then `docker compose up -d`.
+
+| Mode | Method | Status | Response |
+|---|---|---|---|
+| Async (default) | `POST .../rebuild` | `202` | `{"task_id": "...", "status": "pending"}` |
+| Sync | `POST .../rebuild?sync=true` | `200` | `{"status": "rebuilt", ...}` |
 
 **Request body** (optional)
 
@@ -128,17 +198,104 @@ Runs `docker compose build` then `docker compose up -d`.
 | `no_cache` | bool | `false` | Pass `--no-cache` to `docker compose build` |
 | `build_args` | object | — | `{ "HTTP_PROXY": "http://proxy:8080", ... }` — passed as `--build-arg` to `docker compose build`. Overrides registry-stored values when provided. |
 
-**Response `200`**
+**Example — async**
+```bash
+curl -X POST http://localhost:8765/users/alice/services/myapp/0/rebuild \
+  -H 'Content-Type: application/json' \
+  -d '{"no_cache": true, "build_args": {"HTTP_PROXY": "http://proxy:8080"}}'
+```
+
+**Response `202`**
+```json
+{
+  "task_id": "c3d4e5f6a7b8",
+  "status": "pending",
+  "type": "rebuild",
+  "message": "Rebuild queued.  Poll GET /tasks/c3d4e5f6a7b8 for status."
+}
+```
+
+**Response `200` (sync only)**
 ```json
 { "status": "rebuilt", "user_name": "alice", "service_name": "myapp", "label": "0" }
+```
+
+---
+
+## `GET /tasks` — List All Tasks
+
+Returns all tasks in the pool, newest first.  Completed/failed/cancelled tasks are
+auto-cleaned after 1 hour.
+
+**Response `200`**
+```json
+{
+  "count": 2,
+  "tasks": [
+    {
+      "task_id": "c3d4e5f6a7b8",
+      "type": "rebuild",
+      "status": "running",
+      "created_at": 1717800000.0,
+      "updated_at": 1717800001.0,
+      "result": null,
+      "error": null
+    },
+    {
+      "task_id": "a1b2c3d4e5f6",
+      "type": "register",
+      "status": "completed",
+      "created_at": 1717799900.0,
+      "updated_at": 1717799905.0,
+      "result": {"status": "registered", "entry": {...}},
+      "error": null
+    }
+  ]
+}
+```
+
+---
+
+## `GET /tasks/{task_id}` — Query Task
+
+Poll for task progress.  Task statuses: `pending` → `running` → `completed` | `failed` | `cancelled`.
+
+**Response `200`**
+```json
+{
+  "task_id": "a1b2c3d4e5f6",
+  "type": "register",
+  "status": "completed",
+  "created_at": 1717799900.0,
+  "updated_at": 1717799905.0,
+  "result": {"status": "registered", "entry": {...}},
+  "error": null
+}
 ```
 
 **Error codes**
 
 | Code | Cause |
 |---|---|
-| `404` | No registration or generated compose file not found |
-| `500` | Build or up failed |
+| `404` | Task not found (never existed or cleaned up) |
+
+---
+
+## `DELETE /tasks/{task_id}` — Cancel Task
+
+Cancels a pending or running task.  Already-completed tasks return `409`.
+
+**Response `200`**
+```json
+{ "task_id": "a1b2c3d4e5f6", "status": "cancelled" }
+```
+
+**Error codes**
+
+| Code | Cause |
+|---|---|
+| `404` | Task not found |
+| `409` | Task already in terminal state (`completed` / `failed` / `cancelled`) |
 
 ---
 
@@ -195,6 +352,35 @@ GET /users/alice
 
 A service is **healthy** when all containers declared in its compose file are running with status `Up`.
 A service is **missing** when its compose file does not exist (e.g. was deleted externally).
+
+---
+
+## Quick Reference
+
+```bash
+# Async register (default) — returns task_id immediately
+curl -X POST http://localhost:8765/users -H 'Content-Type: application/json' -d '{...}'
+# → {"task_id": "a1b2c3d4e5f6", "status": "pending"}
+
+# Poll task status
+curl http://localhost:8765/tasks/a1b2c3d4e5f6
+
+# List all tasks
+curl http://localhost:8765/tasks
+
+# Cancel a task
+curl -X DELETE http://localhost:8765/tasks/a1b2c3d4e5f6
+
+# Sync register (blocking — backward compatible)
+curl -X POST "http://localhost:8765/users?sync=true" -H 'Content-Type: application/json' -d '{...}'
+
+# Sync rebuild
+curl -X POST "http://localhost:8765/users/alice/services/myapp/0/rebuild?sync=true" \
+  -H 'Content-Type: application/json' -d '{"no_cache": true}'
+
+# Sync remove
+curl -X DELETE "http://localhost:8765/users/alice/services/myapp/0?sync=true"
+```
 
 ---
 

@@ -82,6 +82,8 @@ docker compose -f docker-compose.provision.yml up -d --build
 ```
 
 **3. Register a user — just the service name and filenames**
+
+*Async (default) — returns task_id immediately, work runs in background:*
 ```bash
 curl -X POST http://localhost:8765/users \
   -H 'Content-Type: application/json' \
@@ -95,21 +97,44 @@ curl -X POST http://localhost:8765/users \
     "domain": "example.com",
     "passwd": "secret"
   }'
+# → {"task_id": "a1b2c3d4e5f6", "status": "pending", "type": "register"}
 ```
 
-> `project_root` can be a bare name (`"myapp"`), a relative path, or a full absolute path. A bare name resolves to `SOURCE_PROJECTS_DIR/myapp`.
-> `SOURCE_PROJECTS_DIR` defaults to `$PROVISION_DIR/source_projects` (set in `docker-compose.provision.yml`). Override it with the `SOURCE_PROJECTS_DIR` env var.
->
-> **Password / auth**: `passwd` defaults to `"123456"`. Pass `"passwd": ""` to disable HTTP basic auth entirely — no `.htpasswd` file is created and `auth_basic` directives are stripped from the rendered nginx conf.
+*Sync (blocking) — add ?sync=true:*
+```bash
+curl -X POST "http://localhost:8765/users?sync=true" \
+  -H 'Content-Type: application/json' \
+  -d '{...}'
+# → {"status": "registered", "entry": {...}}
+```
 
-**4. Check status**
+**4. Poll task status or check all tasks**
+```bash
+curl http://localhost:8765/tasks/a1b2c3d4e5f6
+# → {"task_id": "a1b2c3d4e5f6", "status": "completed", "result": {...}}
+
+curl http://localhost:8765/tasks
+# → {"count": 3, "tasks": [...]}
+
+curl -X DELETE http://localhost:8765/tasks/a1b2c3d4e5f6
+# → cancel a pending/running task
+```
+
+**5. Check user status**
 ```bash
 curl http://localhost:8765/users/alice
 ```
 
-**5. Remove**
+**6. Rebuild (with proxy build args)**
 ```bash
-curl -X DELETE http://localhost:8765/users/alice/services/myapp/0
+curl -X POST "http://localhost:8765/users/alice/services/myapp/0/rebuild?sync=true" \
+  -H 'Content-Type: application/json' \
+  -d '{"no_cache": true, "build_args": {"HTTP_PROXY": "http://proxy:8080"}}'
+```
+
+**7. Remove**
+```bash
+curl -X DELETE "http://localhost:8765/users/alice/services/myapp/0?sync=true"
 ```
 
 ---
@@ -204,8 +229,8 @@ flowchart LR
 # Install dependencies (requires uv)
 uv sync
 
-# Run unit + e2e tests (132 tests, no Docker needed)
-python -m pytest tests/test_unit.py tests/test_e2e.py -v
+# Run unit + e2e + proxy + task manager tests (181 tests, no Docker needed)
+uv run pytest tests/test_unit.py tests/test_e2e.py tests/test_proxy_support.py tests/test_task_manager.py -v
 
 # Run full integration tests (requires Docker)
 sudo bash tests/test_integration.sh
