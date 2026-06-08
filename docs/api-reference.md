@@ -46,6 +46,7 @@ Liveness probe — does not touch Docker.
 | `domain` | string | — | Domain for nginx `server_name`; default `"localhost"` |
 | `passwd` | string | — | Plain-text password; default `"123456"`. Hashed with bcrypt before storage. Pass `""` to disable auth entirely (no `.htpasswd` written, `auth_basic` lines stripped from nginx conf) |
 | `volumes` | object | — | `{ "template_vol_key": "/host/path", ... }` |
+| `build_args` | object | — | `{ "HTTP_PROXY": "http://proxy:8080", ... }` — passed as `--build-arg` to `docker compose build` (run before `compose up` when provided). Stored in registry for future rebuilds. |
 
 > † Exactly one of `compose_file_path` or `compose_template_path` must be provided.
 
@@ -125,6 +126,7 @@ Runs `docker compose build` then `docker compose up -d`.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `no_cache` | bool | `false` | Pass `--no-cache` to `docker compose build` |
+| `build_args` | object | — | `{ "HTTP_PROXY": "http://proxy:8080", ... }` — passed as `--build-arg` to `docker compose build`. Overrides registry-stored values when provided. |
 
 **Response `200`**
 ```json

@@ -57,6 +57,7 @@ def register_user(
     nginx_container: str = "provision-nginx",
     nginx_output_dir: str | Path | None = None,
     user_data_dir: str | Path | None = None,
+    build_args: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Register a user and start their service containers.
 
@@ -67,7 +68,7 @@ def register_user(
     3. Add registry entry.
     4. Render compose file (optionally copies env_file).
     5. Render nginx conf + write htpasswd file.
-    6. ``docker compose up``.
+    6. ``docker compose build`` (if *build_args* provided) then ``docker compose up``.
     7. Connect provision-nginx to the user's isolated network + reload.
 
     Parameters
@@ -150,6 +151,7 @@ def register_user(
         "nginx_conf_path": nginx_out,
         "htpasswd_path": htpasswd_out,
         "volumes": volumes,
+        "build_args": build_args or {},
     }
 
     # Duplicate check + add are atomic to prevent concurrent registrations
@@ -180,6 +182,8 @@ def register_user(
 
     # --- Start containers ---
     try:
+        if build_args:
+            docker_ops.compose_build(compose_out, env_file=copied_env, project_name=entry["network_name"], build_args=build_args)
         docker_ops.compose_up(compose_out, env_file=copied_env, project_name=entry["network_name"])
     except RuntimeError:
         # Rollback: remove registry entry so the caller can retry
@@ -252,12 +256,13 @@ def rebuild_user(
     service_name: str,
     label: str,
     no_cache: bool = False,
+    build_args: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Rebuild and restart a user's service containers.
 
     Steps
     -----
-    1. ``docker compose build`` (optionally with ``--no-cache``).
+    1. ``docker compose build`` (optionally with ``--no-cache`` and ``--build-arg``).
     2. ``docker compose up``.
 
     Raises
@@ -281,7 +286,10 @@ def rebuild_user(
 
     env_file = entry.get("env_file_path") or None
     project_name = entry.get("network_name")
-    docker_ops.compose_build(compose_file, no_cache=no_cache, env_file=env_file, project_name=project_name)
+    # Use explicit build_args if provided; otherwise fall back to registry-stored ones
+    if build_args is None:
+        build_args = entry.get("build_args") or None
+    docker_ops.compose_build(compose_file, no_cache=no_cache, env_file=env_file, project_name=project_name, build_args=build_args)
     docker_ops.compose_up(compose_file, env_file=env_file, project_name=project_name)
 
     return {"user_name": user_name, "service_name": service_name, "label": label}

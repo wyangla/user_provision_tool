@@ -31,6 +31,7 @@ Start a user's containers from a Jinja2 compose template.
 | `--env-file` | `-e` | — | Path to a `.env` file for Docker Compose variable substitution |
 | `--label` | `-l` | — | Digits only; default `0` |
 | `--domain` | `-d` | — | Domain for nginx `server_name`; default `localhost` |
+| `--build-arg` | — | — | `KEY=VALUE` (repeatable). Passed as `--build-arg` to `docker compose build` which runs before `compose up` when provided. Stored in registry for future rebuilds. |
 
 ¹ `-tc` and `-fc` are mutually exclusive; exactly one is required. `-tn` and `-fn` are mutually exclusive and both optional.
 
@@ -91,6 +92,18 @@ python cli/register.py \
   -fn nginx.conf \
   -v app_data=/srv/provision/user-data/alice/app \
   -d example.com
+
+# With proxy build args (passed to docker compose build before up)
+python cli/register.py \
+  -u alice \
+  -sn myapp \
+  -pr myapp \
+  -fc docker-compose.yml \
+  -fn nginx.conf \
+  -e .env \
+  -d example.com \
+  --build-arg HTTP_PROXY=http://proxy:8080 \
+  --build-arg HTTPS_PROXY=http://proxy:8080
 ```
 
 ---
@@ -127,11 +140,17 @@ Run `docker compose build` followed by `docker compose up -d`. Useful after upda
 | `--service-name` | `-sn` | ✓ | Service name |
 | `--label` | `-l` | ✓ | Label |
 | `--no-cache` | — | — | Build without Docker layer cache |
+| `--build-arg` | — | — | `KEY=VALUE` (repeatable). Passed as `--build-arg` to `docker compose build`. Overrides registry-stored values when provided. |
 
 ### Example
 
 ```bash
 python cli/rebuild.py -u alice -sn myapp -l 0 --no-cache
+
+# With proxy build args
+python cli/rebuild.py -u alice -sn myapp -l 0 --no-cache \
+  --build-arg HTTP_PROXY=http://proxy:8080 \
+  --build-arg HTTPS_PROXY=http://proxy:8080
 ```
 
 ---

@@ -8,6 +8,7 @@ workflow by running the actual entry-point scripts through subprocess, with:
 
 from __future__ import annotations
 
+import io
 import json
 import subprocess
 import sys
@@ -38,11 +39,18 @@ def _run_script(script: str, args: list[str], env_overrides: dict | None = None)
     raise NotImplementedError  # not used — we call main() directly instead
 
 
-def _make_docker_mock(returncode: int = 0) -> MagicMock:
-    """Return a mock that mimics a successful subprocess.CompletedProcess."""
-    m = MagicMock()
-    m.returncode = returncode
-    return m
+class _MockDockerCalls:
+    """Thin wrapper so call_args_list stays in sync with the live raw_calls list."""
+
+    def __init__(self, raw_calls: list[list[str]]):
+        self._raw = raw_calls
+
+    @property
+    def call_args_list(self) -> list:
+        return [call(c) for c in self._raw]
+
+    def reset_mock(self) -> None:
+        self._raw.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -61,11 +69,27 @@ def isolated_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture()
-def mock_docker(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
-    """Patch subprocess.run inside docker_ops to prevent real docker calls."""
-    mock = MagicMock(return_value=_make_docker_mock(0))
-    monkeypatch.setattr(docker_ops.subprocess, "run", mock)
-    return mock
+def mock_docker(monkeypatch: pytest.MonkeyPatch) -> _MockDockerCalls:
+    """Patch subprocess.Popen inside docker_ops to prevent real docker calls.
+
+    Returns a wrapper whose ``call_args_list`` is populated with
+    ``call(args)`` entries so existing tests using ``c.args[0]`` continue
+    to work.  Supports ``reset_mock()``.
+    """
+    raw_calls: list[list[str]] = []
+
+    class _FakeProc:
+        def __init__(self, args, **kwargs):
+            raw_calls.append(list(args))
+            self.returncode = 0
+            self.stdout = io.StringIO("")
+            self.stderr = io.StringIO("")
+        def wait(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
+    monkeypatch.setattr(docker_ops.subprocess, "Popen", _FakeProc)
+    return _MockDockerCalls(raw_calls)
 
 
 @pytest.fixture()

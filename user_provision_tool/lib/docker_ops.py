@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 
@@ -31,20 +32,44 @@ def _run(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
     # Enable BuildKit so Dockerfiles using --mount=type=cache and other
     # BuildKit features work correctly.
     env = {**os.environ, "DOCKER_BUILDKIT": "1"}
-    result = subprocess.run(args, text=True, capture_output=True, env=env)
-    if result.stdout:
-        print(result.stdout, end="", flush=True)
-        _write_log(result.stdout)
-    if result.stderr:
-        print(result.stderr, end="", file=sys.stderr, flush=True)
-        _write_log(result.stderr)
-    if check and result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()
+
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+
+    def _read_stdout(pipe) -> None:
+        for line in iter(pipe.readline, ""):
+            print(line, end="", flush=True)
+            _write_log(line)
+            stdout_lines.append(line)
+
+    def _read_stderr(pipe) -> None:
+        for line in iter(pipe.readline, ""):
+            print(line, end="", file=sys.stderr, flush=True)
+            _write_log(line)
+            stderr_lines.append(line)
+
+    with subprocess.Popen(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env) as proc:
+        t_out = threading.Thread(target=_read_stdout, args=(proc.stdout,), daemon=True)
+        t_err = threading.Thread(target=_read_stderr, args=(proc.stderr,), daemon=True)
+        t_out.start()
+        t_err.start()
+        proc.wait()
+        # Close write ends so reader threads see EOF and exit
+        proc.stdout.close()  # type: ignore[union-attr]
+        proc.stderr.close()  # type: ignore[union-attr]
+        t_out.join()
+        t_err.join()
+
+    stdout = "".join(stdout_lines)
+    stderr = "".join(stderr_lines)
+
+    if check and proc.returncode != 0:
+        detail = (stderr or stdout or "").strip()
         raise RuntimeError(
-            f"Command failed (exit {result.returncode}): {' '.join(args)}"
+            f"Command failed (exit {proc.returncode}): {' '.join(args)}"
             + (f"\n{detail}" if detail else "")
         )
-    return result
+    return subprocess.CompletedProcess(args, proc.returncode, stdout=stdout, stderr=stderr)
 
 
 def _compose_base(compose_file: str, env_file: str | None, project_name: str | None) -> list[str]:
@@ -64,10 +89,13 @@ def compose_down(compose_file: str, env_file: str | None = None, project_name: s
     _run(_compose_base(compose_file, env_file, project_name) + ["down"])
 
 
-def compose_build(compose_file: str, no_cache: bool = False, env_file: str | None = None, project_name: str | None = None) -> None:
+def compose_build(compose_file: str, no_cache: bool = False, env_file: str | None = None, project_name: str | None = None, build_args: dict[str, str] | None = None) -> None:
     cmd = _compose_base(compose_file, env_file, project_name) + ["build"]
     if no_cache:
         cmd.append("--no-cache")
+    if build_args:
+        for key, value in build_args.items():
+            cmd += ["--build-arg", f"{key}={value}"]
     _run(cmd)
 
 

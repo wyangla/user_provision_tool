@@ -634,6 +634,131 @@ fi
 curl -sf -X DELETE "$API_URL/users/pruser/services/myapp/0" >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
+# Test 18: Start MockProxy and register with build_args pointing to it
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 18: Register with build_args → MockProxy ---"
+
+# Start the MockProxy on a random port — write its URL to a temp file
+MOCK_PROXY_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()")
+MOCK_PROXY_URL_FILE="${PROVISION_DIR}/generated/.mock_proxy_url"
+MOCK_PROXY_PID=""
+echo "  Starting MockProxy on port $MOCK_PROXY_PORT ..."
+python3 -c "
+import sys, threading
+sys.path.insert(0, '$SCRIPT_DIR')
+from mock_proxy import MockProxy
+proxy = MockProxy(port=$MOCK_PROXY_PORT)
+proxy.start()
+with open('${MOCK_PROXY_URL_FILE}', 'w') as f:
+    f.write(proxy.url)
+# Block until killed
+threading.Event().wait()
+" &
+MOCK_PROXY_PID=$!
+sleep 2  # give the proxy time to start and write URL
+
+# Read the MockProxy URL from the temp file
+if [ -f "$MOCK_PROXY_URL_FILE" ]; then
+    MOCK_PROXY_URL=$(cat "$MOCK_PROXY_URL_FILE")
+    echo "  MockProxy running at $MOCK_PROXY_URL (PID $MOCK_PROXY_PID)"
+fi
+
+if [ -z "${MOCK_PROXY_URL:-}" ] || ! kill -0 "$MOCK_PROXY_PID" 2>/dev/null; then
+    MOCK_PROXY_URL="http://127.0.0.1:${MOCK_PROXY_PORT}"
+    fail "MockProxy failed to start or write URL file"
+fi
+
+# Register with build_args pointing to MockProxy
+mkdir -p "${PROVISION_DIR}/user-data/mockpx/app" "${PROVISION_DIR}/user-data/mockpx/db"
+REGISTER_BODY_MPX=$(cat <<EOF
+{
+  "user_name": "mockpx",
+  "service_name": "myapp",
+  "compose_template_path": "${PROVISION_DIR}/templates/docker-compose.template.yml.j2",
+  "label": "0",
+  "domain": "localhost",
+  "passwd": "",
+  "volumes": {
+    "app_data": "${PROVISION_DIR}/user-data/mockpx/app",
+    "db_data":  "${PROVISION_DIR}/user-data/mockpx/db"
+  },
+  "build_args": {
+    "HTTP_PROXY": "${MOCK_PROXY_URL}",
+    "HTTPS_PROXY": "${MOCK_PROXY_URL}"
+  }
+}
+EOF
+)
+mpx_resp=$(curl -sf -X POST "$API_URL/users" \
+    -H "Content-Type: application/json" \
+    -d "$REGISTER_BODY_MPX")
+mpx_status=$(echo "$mpx_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
+if [ "$mpx_status" = "registered" ]; then
+    pass "Register with MockProxy build_args succeeded"
+else
+    fail "Register with MockProxy build_args failed: $mpx_resp"
+fi
+
+# Verify build_args stored in response
+mpx_ba=$(echo "$mpx_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['entry'].get('build_args','{}'))" 2>/dev/null || echo "{}")
+if echo "$mpx_ba" | grep -q "$MOCK_PROXY_URL"; then
+    pass "build_args contain MockProxy URL in registry response"
+else
+    fail "build_args missing MockProxy URL: $mpx_ba"
+fi
+
+# Verify proxy URL appears in docker_ops.log
+DOCKER_OPS_LOG="${PROVISION_DIR}/generated/docker_ops.log"
+if [ -f "$DOCKER_OPS_LOG" ]; then
+    if grep -q "$MOCK_PROXY_URL" "$DOCKER_OPS_LOG"; then
+        pass "docker_ops.log contains MockProxy URL as --build-arg"
+    else
+        fail "docker_ops.log missing MockProxy URL (checked: $MOCK_PROXY_URL)"
+    fi
+else
+    fail "docker_ops.log not found at $DOCKER_OPS_LOG"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 19: Rebuild with override build_args → MockProxy
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 19: Rebuild with override build_args → MockProxy ---"
+OVERRIDE_PROXY="http://127.0.0.1:${MOCK_PROXY_PORT}"
+rebuild_mpx_resp=$(curl -sf -X POST "$API_URL/users/mockpx/services/myapp/0/rebuild" \
+    -H "Content-Type: application/json" \
+    -d "{\"no_cache\": true, \"build_args\": {\"HTTP_PROXY\": \"${OVERRIDE_PROXY}\", \"NO_PROXY\": \"localhost\"}}")
+rebuild_mpx_status=$(echo "$rebuild_mpx_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
+if [ "$rebuild_mpx_status" = "rebuilt" ]; then
+    pass "Rebuild with MockProxy override build_args returned status=rebuilt"
+else
+    fail "Rebuild with MockProxy override build_args failed: $rebuild_mpx_resp"
+fi
+
+# Check the override URL appeared in docker_ops.log AFTER rebuild
+if [ -f "$DOCKER_OPS_LOG" ]; then
+    if grep -q "NO_PROXY=localhost" "$DOCKER_OPS_LOG"; then
+        pass "docker_ops.log contains NO_PROXY from rebuild override"
+    else
+        fail "docker_ops.log missing NO_PROXY=localhost from rebuild"
+    fi
+else
+    fail "docker_ops.log not found"
+fi
+
+# Stop MockProxy
+if [ -n "$MOCK_PROXY_PID" ] && kill -0 "$MOCK_PROXY_PID" 2>/dev/null; then
+    kill "$MOCK_PROXY_PID" 2>/dev/null || true
+    wait "$MOCK_PROXY_PID" 2>/dev/null || true
+    echo "  MockProxy stopped"
+fi
+rm -f "$MOCK_PROXY_URL_FILE"
+
+# Clean up mockpx
+curl -sf -X DELETE "$API_URL/users/mockpx/services/myapp/0" >/dev/null 2>&1 || true
+
+# ---------------------------------------------------------------------------
 # Results
 # ---------------------------------------------------------------------------
 echo ""

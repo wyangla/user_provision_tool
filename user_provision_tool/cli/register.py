@@ -96,6 +96,8 @@ def parse_args() -> argparse.Namespace:
 
     p.add_argument("-l", "--label", default="0", help="Label (digits only, default: 0)")
     p.add_argument("-d", "--domain", default="localhost", help="Domain name for nginx hostname")
+    p.add_argument("--build-arg", action="append", default=[], dest="build_args_raw",
+        metavar="KEY=VALUE", help="Build argument passed to docker compose build (can be repeated, e.g. --build-arg HTTP_PROXY=http://proxy:8080)")
     return p.parse_args()
 
 
@@ -104,6 +106,19 @@ def parse_volumes(raw: list[str]) -> dict[str, str]:
     for item in raw:
         if "=" not in item:
             print(f"ERROR: volume mapping must be KEY=VALUE, got: {item}", file=sys.stderr)
+            sys.exit(1)
+        k, v = item.split("=", 1)
+        result[k.strip()] = v.strip()
+    return result
+
+
+def _parse_build_args(raw: list[str]) -> dict[str, str] | None:
+    if not raw:
+        return None
+    result: dict[str, str] = {}
+    for item in raw:
+        if "=" not in item:
+            print(f"ERROR: --build-arg must be KEY=VALUE, got: {item}", file=sys.stderr)
             sys.exit(1)
         k, v = item.split("=", 1)
         result[k.strip()] = v.strip()
@@ -225,6 +240,9 @@ def main() -> None:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 
+    # --- Parse build args ---
+    build_args = _parse_build_args(args.build_args_raw)
+
     # --- Core registration workflow ---
     try:
         result = provisioner.register_user(
@@ -240,6 +258,7 @@ def main() -> None:
             nginx_template=nginx_template,
             domain=args.domain,
             env_file=env_file,
+            build_args=build_args,
         )
     except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)

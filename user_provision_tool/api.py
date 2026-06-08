@@ -85,6 +85,7 @@ class RegisterRequest(BaseModel):
     domain: str = "localhost"
     passwd: str = "123456"
     volumes: dict[str, str] = {}
+    build_args: dict[str, str] | None = None
 
     @field_validator("user_name", "service_name")
     @classmethod
@@ -121,6 +122,7 @@ class RegisterRequest(BaseModel):
 
 class RebuildRequest(BaseModel):
     no_cache: bool = False
+    build_args: dict[str, str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +221,7 @@ def register_user(req: RegisterRequest) -> dict[str, Any]:
             domain=req.domain,
             env_file=env_file_path,
             nginx_container=NGINX_CONTAINER,
+            build_args=req.build_args,
         )
     except ValueError as e:
         raise HTTPException(409, str(e))
@@ -268,6 +271,7 @@ def rebuild_user(
             service_name=service_name,
             label=label,
             no_cache=req.no_cache,
+            build_args=req.build_args,
         )
     except KeyError as e:
         raise HTTPException(404, str(e))

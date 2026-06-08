@@ -1,6 +1,8 @@
 services:
   provision-api:
-    build: ./user_provision_tool
+    build:
+      context: ./user_provision_tool
+
     container_name: provision-api
     ports:
       - "${PROVISION_API_PORT:-8765}:8000"

@@ -321,19 +321,23 @@ class TestTemplateEngine:
 
 
 class TestDockerOps:
-    """Unit tests for docker_ops helper functions (subprocess patched)."""
+    """Unit tests for docker_ops helper functions (subprocess.Popen patched)."""
 
     def _mock_run(self, monkeypatch):
-        """Patch subprocess.run inside docker_ops and return a call-list."""
+        """Patch subprocess.Popen inside docker_ops and return a call-list."""
         calls: list[list[str]] = []
 
-        def fake_run(args, **kwargs):
-            calls.append(list(args))
-            m = MagicMock()
-            m.returncode = 0
-            return m
+        class _FakeProc:
+            def __init__(self, args, **kwargs):
+                calls.append(list(args))
+                self.returncode = 0
+                self.stdout = io.StringIO("")
+                self.stderr = io.StringIO("")
+            def wait(self): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
 
-        monkeypatch.setattr(docker_ops.subprocess, "run", fake_run)
+        monkeypatch.setattr(docker_ops.subprocess, "Popen", _FakeProc)
         return calls
 
     def test_network_connect_command(self, monkeypatch):
@@ -359,31 +363,66 @@ class TestDockerOps:
 
     def test_network_connect_uses_check_false(self, monkeypatch):
         """network_connect must not raise even when docker returns non-zero."""
-        def fail_run(args, **kwargs):
-            m = MagicMock()
-            m.returncode = 1
-            return m
-        monkeypatch.setattr(docker_ops.subprocess, "run", fail_run)
-        # Should not raise
+        class _FailProc:
+            def __init__(self, args, **kwargs):
+                self.returncode = 1
+                self.stdout = io.StringIO("")
+                self.stderr = io.StringIO("")
+            def wait(self): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+        monkeypatch.setattr(docker_ops.subprocess, "Popen", _FailProc)
         docker_ops.network_connect("provision-nginx", "nonexistent-net")
 
     def test_network_disconnect_uses_check_false(self, monkeypatch):
-        """network_disconnect must not raise even when docker returns non-zero."""
-        def fail_run(args, **kwargs):
-            m = MagicMock()
-            m.returncode = 1
-            return m
-        monkeypatch.setattr(docker_ops.subprocess, "run", fail_run)
+        class _FailProc:
+            def __init__(self, args, **kwargs):
+                self.returncode = 1
+                self.stdout = io.StringIO("")
+                self.stderr = io.StringIO("")
+            def wait(self): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+        monkeypatch.setattr(docker_ops.subprocess, "Popen", _FailProc)
         docker_ops.network_disconnect("provision-nginx", "nonexistent-net")
 
     def test_nginx_reload_uses_check_false(self, monkeypatch):
-        """nginx_reload must not raise even when the container is absent."""
-        def fail_run(args, **kwargs):
-            m = MagicMock()
-            m.returncode = 1
-            return m
-        monkeypatch.setattr(docker_ops.subprocess, "run", fail_run)
+        class _FailProc:
+            def __init__(self, args, **kwargs):
+                self.returncode = 1
+                self.stdout = io.StringIO("")
+                self.stderr = io.StringIO("")
+            def wait(self): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+        monkeypatch.setattr(docker_ops.subprocess, "Popen", _FailProc)
         docker_ops.nginx_reload("provision-nginx")
+
+    def test_compose_build_with_build_args(self, monkeypatch):
+        """compose_build appends --build-arg flags before the build subcommand."""
+        calls_capture: list[list[str]] = []
+
+        class _CaptureProc:
+            def __init__(self, args, **kwargs):
+                calls_capture.append(list(args))
+                self.returncode = 0
+                self.stdout = io.StringIO("")
+                self.stderr = io.StringIO("")
+            def wait(self): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+
+        monkeypatch.setattr(docker_ops.subprocess, "Popen", _CaptureProc)
+        docker_ops.compose_build(
+            "/tmp/dc.yml",
+            build_args={"HTTP_PROXY": "http://proxy:3128", "HTTPS_PROXY": "http://proxy:3129"},
+        )
+        assert len(calls_capture) == 1
+        cmd = calls_capture[0]
+        assert "build" in cmd
+        assert "--build-arg" in cmd
+        assert "HTTP_PROXY=http://proxy:3128" in cmd
+        assert "HTTPS_PROXY=http://proxy:3129" in cmd
 
 
 # ---------------------------------------------------------------------------
@@ -762,8 +801,16 @@ class TestAPIProjectRoot:
         monkeypatch.setattr(api, "SOURCE_PROJECTS_DIR", sp_dir)
         monkeypatch.setattr(reg_mod, "REGISTRY_FILE", tmp_path / "user_registry.yml")
 
-        mock_run = MagicMock(return_value=MagicMock(returncode=0))
-        monkeypatch.setattr(docker_ops.subprocess, "run", mock_run)
+        class _FakeProc:
+            def __init__(self, args, **kwargs):
+                self.returncode = 0
+                self.stdout = io.StringIO("")
+                self.stderr = io.StringIO("")
+            def wait(self): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+
+        monkeypatch.setattr(docker_ops.subprocess, "Popen", _FakeProc)
 
         self.sp_dir = sp_dir
         self.tmp_path = tmp_path
