@@ -148,7 +148,7 @@ are left intact by the `envsubst '$$GENERATED_DIR'` invocation.
 
 ### Dynamic updates
 
-When provision-api registers or removes a user:
+When provision-api registers or removes a user's service instance:
 
 1. It writes (or deletes) the user's `*.nginx.conf` in `GENERATED_DIR`.
 2. It runs `docker exec provision-nginx nginx -s reload` — nginx picks up the new conf

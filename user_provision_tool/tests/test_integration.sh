@@ -475,6 +475,19 @@ if [ -f "$FC_NGINX_CONF" ]; then
     else
         pass "passwd='' → nginx conf has no auth_basic directives"
     fi
+    # Verify proxy_pass target was rendered with container_prefix (hint-based:
+    # "myapp-web" → "{{ container_prefix }}web" → "myapp-user_fileuser-0-web")
+    if grep -q "proxy_pass.*myapp-user_fileuser-0-web:80" "$FC_NGINX_CONF"; then
+        pass "proxy_pass rendered with correct container_prefix (hint-based)"
+    else
+        fail "proxy_pass missing rendered container name (hint-based): $(grep proxy_pass "$FC_NGINX_CONF" || echo 'no proxy_pass found')"
+    fi
+    # The raw hint-prefixed host should NOT appear in the rendered output
+    if grep -q "http://myapp-web" "$FC_NGINX_CONF"; then
+        fail "proxy_pass still has literal 'myapp-web' (not templatized)"
+    else
+        pass "proxy_pass does not contain literal 'myapp-web'"
+    fi
 else
     fail "Nginx conf not found at: $FC_NGINX_CONF"
 fi
@@ -885,6 +898,156 @@ if [ "$t404_http" = "404" ]; then
 else
     fail "Expected 404 for nonexistent task, got: $t404_http"
 fi
+
+# ---------------------------------------------------------------------------
+# Test 24: proxy_pass compose service name detection
+#          When nginx.conf uses a compose service name (not hint-prefixed)
+#          in proxy_pass, the converter detects it and rewrites to
+#          {{ container_prefix }}<service_name>.
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 24: proxy_pass compose service name detection ---"
+
+# Write a plain docker-compose.yml with services "web" and "db"
+COMPOSE_SVC_TEST_DIR="${PROVISION_DIR}/source_projects/svcname_test"
+mkdir -p "$COMPOSE_SVC_TEST_DIR"
+cat > "${COMPOSE_SVC_TEST_DIR}/docker-compose.yml" <<'COMPOSE_EOF'
+services:
+  web:
+    image: nginx:alpine
+    container_name: web
+    expose:
+      - "80"
+    volumes:
+      - html:/usr/share/nginx/html:ro
+    networks:
+      - svc-net
+  db:
+    image: postgres:16-alpine
+    container_name: db
+    environment:
+      - POSTGRES_DB=svctest
+    volumes:
+      - db:/var/lib/postgresql/data
+    networks:
+      - svc-net
+
+volumes:
+  html:
+  db:
+
+networks:
+  svc-net:
+COMPOSE_EOF
+
+# Write a plain nginx.conf that uses the compose SERVICE NAME "web"
+# (NOT "myapp-web" — deliberately not prefixed with the provision service_name_hint)
+cat > "${COMPOSE_SVC_TEST_DIR}/nginx.conf" <<'NGINX_EOF'
+server {
+    listen 80;
+    server_name svcname.example.com;
+
+    location / {
+        proxy_pass http://web:80;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+NGINX_EOF
+
+mkdir -p "${PROVISION_DIR}/user-data/svcuser/html" "${PROVISION_DIR}/user-data/svcuser/db"
+
+SVC_REG_BODY=$(cat <<EOF
+{
+  "user_name": "svcuser",
+  "service_name": "svcname_test",
+  "project_root": "svcname_test",
+  "compose_file_path": "docker-compose.yml",
+  "nginx_conf_file_path": "nginx.conf",
+  "label": "0",
+  "domain": "localhost",
+  "passwd": "",
+  "volumes": {
+    "html": "${PROVISION_DIR}/user-data/svcuser/html",
+    "db":   "${PROVISION_DIR}/user-data/svcuser/db"
+  }
+}
+EOF
+)
+svc_resp=$(curl -sf -X POST "$API_URL/users?sync=true" \
+    -H "Content-Type: application/json" \
+    -d "$SVC_REG_BODY")
+svc_status=$(echo "$svc_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
+if [ "$svc_status" = "registered" ]; then
+    pass "Compose-service-name nginx: svcuser/svcname_test/0 registered"
+else
+    fail "Compose-service-name nginx registration failed: $svc_resp"
+fi
+
+# --- Verify the generated .j2 template (intermediate file) ---
+SVC_J2="${COMPOSE_SVC_TEST_DIR}/nginx.conf.j2"
+if [ -f "$SVC_J2" ]; then
+    # The template must have {{ container_prefix }}web (compose service name "web" detected)
+    if grep -q "{{ container_prefix }}web" "$SVC_J2"; then
+        pass ".j2 template has {{ container_prefix }}web (compose service name detected)"
+    else
+        fail ".j2 template missing {{ container_prefix }}web: $(grep proxy_pass "$SVC_J2" || echo 'no proxy_pass')"
+    fi
+    # The original literal "http://web:" should NOT remain
+    if grep -q "http://web:" "$SVC_J2"; then
+        fail ".j2 template still has literal 'http://web:' (not replaced)"
+    else
+        pass ".j2 template does not contain literal 'http://web:'"
+    fi
+else
+    fail ".j2 template not found at: $SVC_J2"
+fi
+
+# --- Verify the rendered nginx conf ---
+SVC_NGINX="${PROVISION_DIR}/generated/svcname_test.user-svcuser.0.nginx.conf"
+if [ -f "$SVC_NGINX" ]; then
+    # The rendered conf must have the full container name: svcname_test-user_svcuser-0-web
+    if grep -q "proxy_pass.*svcname_test-user_svcuser-0-web:80" "$SVC_NGINX"; then
+        pass "Rendered nginx conf has correct container name in proxy_pass"
+    else
+        fail "Rendered nginx conf missing container name: $(grep proxy_pass "$SVC_NGINX" || echo 'no proxy_pass')"
+    fi
+    # The raw template variable {{ container_prefix }} must NOT appear
+    if grep -q "{{ container_prefix }}" "$SVC_NGINX"; then
+        fail "Rendered nginx conf has unrendered {{ container_prefix }}"
+    else
+        pass "Rendered nginx conf has no unrendered template variables"
+    fi
+else
+    fail "Rendered nginx conf not found at: $SVC_NGINX"
+fi
+
+# --- Also verify the .j2 template for the compose file was created ---
+SVC_COMPOSE_J2="${COMPOSE_SVC_TEST_DIR}/docker-compose.yml.j2"
+if [ -f "$SVC_COMPOSE_J2" ]; then
+    pass "Compose .j2 template created: docker-compose.yml.j2"
+else
+    fail "Compose .j2 template not found at: $SVC_COMPOSE_J2"
+fi
+
+# --- Verify compose service names were correctly extracted ---
+# (The compose has "web" and "db" — both should appear in the .j2 template
+#  with {{ container_prefix }} prefix in container_name)
+if [ -f "$SVC_COMPOSE_J2" ]; then
+    if grep -q "{{ container_prefix }}web" "$SVC_COMPOSE_J2" && \
+       grep -q "{{ container_prefix }}db" "$SVC_COMPOSE_J2"; then
+        pass "Compose .j2 template has container_prefix for web and db services"
+    else
+        fail "Compose .j2 template missing container_prefix for services"
+    fi
+fi
+
+# Clean up svcuser
+curl -sf -X DELETE "$API_URL/users/svcuser/services/svcname_test/0" >/dev/null 2>&1 || true
+# Clean up the temp source project
+rm -rf "$COMPOSE_SVC_TEST_DIR"
 
 # ---------------------------------------------------------------------------
 # Results

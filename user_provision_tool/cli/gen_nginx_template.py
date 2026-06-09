@@ -5,7 +5,7 @@ Convert a plain nginx conf file into a Jinja2 template (.nginx.conf.j2)
 compatible with user_provision_tool.
 
 Usage:
-    python gen_nginx_template.py <input.conf> [-o output.conf.j2] [-s SERVICE_NAME]
+    python gen_nginx_template.py <input.conf> [-o output.conf.j2] [-s SERVICE_NAME] [-c compose.yml]
 
 See lib/nginx_converter.py for full documentation of the transformations applied.
 """
@@ -20,6 +20,7 @@ from pathlib import Path
 # Allow running from the cli/ directory without installing the package
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from lib.compose_converter import get_compose_service_names
 from lib.nginx_converter import nginx_file_to_template
 
 
@@ -45,6 +46,14 @@ def main() -> None:
             "and populate the header comment (default: input file stem)."
         ),
     )
+    p.add_argument(
+        "-c", "--compose-file",
+        help=(
+            "Path to the companion docker-compose.yml (or .j2 template). "
+            "Service names extracted from this file are used to rewrite "
+            "proxy_pass targets that reference compose service names."
+        ),
+    )
     args = p.parse_args()
 
     input_path = Path(args.input).resolve()
@@ -62,8 +71,19 @@ def main() -> None:
         r"[^a-zA-Z0-9_]", "_", input_path.stem
     )
 
+    compose_service_names: list[str] | None = None
+    if args.compose_file:
+        compose_path = Path(args.compose_file)
+        if not compose_path.exists():
+            print(f"ERROR: compose file not found: {compose_path}", file=sys.stderr)
+            sys.exit(1)
+        compose_service_names = get_compose_service_names(str(compose_path))
+
     try:
-        nginx_file_to_template(str(input_path), str(output_path), service_name_hint)
+        nginx_file_to_template(
+            str(input_path), str(output_path), service_name_hint,
+            compose_service_names=compose_service_names,
+        )
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)

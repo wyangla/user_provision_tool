@@ -208,6 +208,11 @@ class TestE2ERegistration:
         content = nginx_path.read_text()
         assert "server_name myapp-alice-0.example.com;" in content
         assert "auth_basic_user_file" in content
+        # Verify proxy_pass was rendered with the correct container_prefix
+        assert "proxy_pass" in content
+        assert "myapp-user_alice-0-web:80" in content
+        # The raw template variable should NOT be in the rendered output
+        assert "{{ container_prefix }}" not in content
 
     def test_htpasswd_file_generated(self, registered_alice):
         htpasswd_path = Path(registered_alice["htpasswd_path"])
@@ -366,10 +371,164 @@ class TestE2ERegistration:
         assert entry["volumes"]["app_data"] == str(base / "app_data")
         assert entry["volumes"]["db_data"] == str(base / "db_data")
 
+    def test_plain_nginx_conf_proxy_pass_compose_service_name_detected(
+        self, tmp_path, mock_docker, monkeypatch,
+    ):
+        """When a plain nginx.conf uses a compose service name in proxy_pass,
+        the converter detects it and rewrites the host to {{ container_prefix }}<name>.
+        """
+        import shutil
+        import cli.register as reg_script
 
-# ---------------------------------------------------------------------------
-# E2E: Removal
-# ---------------------------------------------------------------------------
+        # --- Write a plain docker-compose.yml with 'web' and 'db' services ---
+        compose_yml = tmp_path / "docker-compose.yml"
+        compose_yml.write_text("""\
+services:
+  web:
+    image: nginx:alpine
+    container_name: web
+    expose:
+      - "80"
+    volumes:
+      - app_data:/usr/share/nginx/html:ro
+    networks:
+      - myapp-net
+  db:
+    image: postgres:16-alpine
+    container_name: db
+    environment:
+      - POSTGRES_DB=myapp
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - myapp-net
+
+volumes:
+  app_data:
+  db_data:
+
+networks:
+  myapp-net:
+""")
+
+        # --- Write a plain nginx.conf that uses compose service names ---
+        nginx_conf = tmp_path / "nginx.conf"
+        nginx_conf.write_text("""\
+server {
+    listen 80;
+    server_name myapp.example.com;
+
+    location / {
+        proxy_pass http://web:80;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+""")
+
+        monkeypatch.setattr("getpass.getpass", lambda prompt="": "secret123")
+        monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+
+        sys_argv = [
+            "cli/register.py",
+            "-u", "alice", "-sn", "myapp",
+            "-pr", str(tmp_path),
+            "-fc", "docker-compose.yml",
+            "-fn", "nginx.conf",
+            "-l", "0",
+            "-d", "example.com",
+            "-v", "app_data=/srv/alice/app",
+            "-v", "db_data=/srv/alice/db",
+        ]
+        with patch.object(sys, "argv", sys_argv):
+            reg_script.main()
+
+        entry = reg_mod.get_user_service("alice", "myapp", "0")
+        assert entry is not None, "Registration did not write registry entry"
+
+        # --- Verify the generated nginx conf ---
+        nginx_out = Path(entry["nginx_conf_path"])
+        assert nginx_out.exists(), f"nginx conf not found at {nginx_out}"
+        content = nginx_out.read_text()
+        # The compose service name "web" should have been replaced
+        assert "proxy_pass http://myapp-user_alice-0-web:80;" in content, (
+            f"Expected rendered container name in proxy_pass, got:\n{content}"
+        )
+        # The raw template variable should NOT be in the rendered output
+        assert "{{ container_prefix }}" not in content
+
+        # --- Verify the generated .j2 template (intermediate file) ---
+        j2_path = tmp_path / "nginx.conf.j2"
+        assert j2_path.exists(), f".j2 template not found at {j2_path}"
+        j2_content = j2_path.read_text()
+        # The template should have {{ container_prefix }}web (not the literal "web")
+        assert "{{ container_prefix }}web:80" in j2_content, (
+            f"Expected {{ container_prefix }}web in template, got:\n{j2_content}"
+        )
+        # The original literal host should NOT remain in the template
+        assert "http://web:80" not in j2_content
+
+    def test_plain_nginx_conf_external_host_unchanged(
+        self, tmp_path, mock_docker, monkeypatch,
+    ):
+        """A proxy_pass to an external host (not a compose service name) is left alone."""
+        import shutil
+        import cli.register as reg_script
+
+        compose_yml = tmp_path / "docker-compose.yml"
+        compose_yml.write_text("""\
+services:
+  web:
+    image: nginx:alpine
+    container_name: web
+    expose:
+      - "80"
+    networks:
+      - myapp-net
+
+networks:
+  myapp-net:
+""")
+
+        nginx_conf = tmp_path / "nginx.conf"
+        nginx_conf.write_text("""\
+server {
+    listen 80;
+    server_name myapp.example.com;
+
+    location / {
+        proxy_pass http://external-api:9000;
+        proxy_set_header Host $host;
+    }
+}
+""")
+
+        monkeypatch.setattr("getpass.getpass", lambda prompt="": "")
+        monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+
+        sys_argv = [
+            "cli/register.py",
+            "-u", "alice", "-sn", "myapp",
+            "-pr", str(tmp_path),
+            "-fc", "docker-compose.yml",
+            "-fn", "nginx.conf",
+            "-l", "0",
+            "-d", "example.com",
+        ]
+        with patch.object(sys, "argv", sys_argv):
+            reg_script.main()
+
+        entry = reg_mod.get_user_service("alice", "myapp", "0")
+        assert entry is not None
+
+        # The .j2 template should still have the literal external host
+        j2_path = tmp_path / "nginx.conf.j2"
+        assert j2_path.exists()
+        j2_content = j2_path.read_text()
+        # external-api is not a compose service → left as-is
+        assert "http://external-api:9000" in j2_content
 
 class TestE2ERemoval:
     def test_removal_deregisters_user(self, registered_alice, mock_docker):

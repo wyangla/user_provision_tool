@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import os
 
 from lib import auth, provisioner, template_engine, validation
-from lib.compose_converter import compose_file_to_template
+from lib.compose_converter import compose_file_to_template, get_compose_service_names
 from lib.nginx_converter import nginx_file_to_template
 
 GENERATED_DIR = Path(
@@ -205,6 +205,14 @@ def main() -> None:
             sys.exit(1)
 
     # --- Resolve nginx template (-tn used directly; -fn triggers conversion) ---
+    # Extract compose service names so proxy_pass targets matching a compose
+    # service name can be rewritten to use {{ container_prefix }}.
+    _compose_svc_names: list[str] = []
+    try:
+        _compose_svc_names = get_compose_service_names(compose_template)
+    except Exception:
+        pass
+
     nginx_template: str | None = None
     if args.nginx_template:
         nginx_src = project_root / args.nginx_template
@@ -219,7 +227,10 @@ def main() -> None:
             sys.exit(1)
         template_out = str(nginx_src.parent / f"{nginx_src.name}.j2")
         try:
-            nginx_file_to_template(str(nginx_src), template_out, args.service_name)
+            nginx_file_to_template(
+                str(nginx_src), template_out, args.service_name,
+                compose_service_names=_compose_svc_names or None,
+            )
         except Exception as exc:
             print(f"ERROR: could not convert nginx file: {exc}", file=sys.stderr)
             sys.exit(1)

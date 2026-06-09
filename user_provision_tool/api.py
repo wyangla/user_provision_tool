@@ -34,7 +34,7 @@ from pydantic import BaseModel, field_validator
 sys.path.insert(0, str(Path(__file__).parent))
 
 from lib import docker_ops, provisioner, registry, template_engine, validation
-from lib.compose_converter import compose_file_to_template
+from lib.compose_converter import compose_file_to_template, get_compose_service_names
 from lib.nginx_converter import nginx_file_to_template
 from lib.task_manager import task_manager
 
@@ -201,6 +201,16 @@ def register_user(
         compose_template = compose_template_path
 
     # --- Resolve nginx template (convert plain file if needed) ---
+    # Extract compose service names so proxy_pass targets matching a compose
+    # service name can be rewritten to use {{ container_prefix }}.
+    _compose_svc_names: list[str] = []
+    try:
+        _compose_src = compose_file_path or compose_template_path
+        if _compose_src:
+            _compose_svc_names = get_compose_service_names(_compose_src)
+    except Exception:
+        pass
+
     nginx_template: str | None = None
     if nginx_conf_file_path:
         src = Path(nginx_conf_file_path)
@@ -208,7 +218,10 @@ def register_user(
             raise HTTPException(404, f"nginx_conf_file_path not found: {nginx_conf_file_path}")
         template_out = str(src.parent / f"{src.name}.j2")
         try:
-            nginx_file_to_template(str(src), template_out, req.service_name)
+            nginx_file_to_template(
+                str(src), template_out, req.service_name,
+                compose_service_names=_compose_svc_names or None,
+            )
         except Exception as e:
             raise HTTPException(422, f"could not convert nginx conf file: {e}")
         nginx_template = template_out
@@ -401,7 +414,7 @@ def _compute_status(filter_user: str | None) -> dict[str, Any]:
     all_users = registry.get_all_users()
 
     if filter_user:
-        user_names = [u["user_name"] for u in all_users if u.get("user_name") == filter_user]
+        user_names = list({u["user_name"] for u in all_users if u.get("user_name") == filter_user})
     else:
         user_names = list({u["user_name"] for u in all_users})
 

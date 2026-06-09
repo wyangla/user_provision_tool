@@ -32,15 +32,32 @@ _HEADER_TPL = """\
 #   {{{{ domain_name }}}}
 #   {{{{ network_name }}}}
 #
-# NOTE: proxy_pass targets whose host started with the service name hint have
-#       been rewritten to use {{{{ container_prefix }}}}<suffix>.  Review and
-#       adjust any remaining literal container names manually.
+# NOTE: proxy_pass targets have been rewritten where possible:
+#   • Hosts matching a compose service name → {{{{ container_prefix }}}}<name>
+#   • Hosts starting with the service name hint → {{{{ container_prefix }}}}<suffix>
+#   Review and adjust any remaining literal container names manually.
 #
 """
 
 
-def convert_nginx(text: str, service_name_hint: str = "") -> str:
-    """Apply Jinja2 substitutions to the text of a plain nginx conf."""
+def convert_nginx(
+    text: str,
+    service_name_hint: str = "",
+    compose_service_names: list[str] | None = None,
+) -> str:
+    """Apply Jinja2 substitutions to the text of a plain nginx conf.
+
+    Parameters
+    ----------
+    service_name_hint:
+        Provision service name used as a prefix hint to rewrite proxy_pass
+        targets (e.g. ``myapp-web`` → ``{{ container_prefix }}web``).
+    compose_service_names:
+        Service keys from the companion docker-compose.yml.  When a proxy_pass
+        host matches one of these names exactly, the entire host is replaced
+        with ``{{ container_prefix }}<name>`` so it resolves to the actual
+        deployed container name at render time.
+    """
 
     # server_name — replace all name tokens after the keyword
     text = re.sub(
@@ -74,9 +91,14 @@ def convert_nginx(text: str, service_name_hint: str = "") -> str:
             return auth_lines + m.group(0)
         text = re.sub(r'[ \t]*proxy_pass[ \t]+\S+;', _inject_auth, text, count=1)
 
-    # proxy_pass — rewrite container-name part when prefix matches service_name_hint
-    if service_name_hint:
-        hint_esc = re.escape(service_name_hint)
+    # --- Build set of compose service names for fast lookup ---
+    compose_names: set[str] = set()
+    if compose_service_names:
+        compose_names = {n.lower() for n in compose_service_names}
+
+    # proxy_pass — rewrite host part when it references a service or matches hint
+    if service_name_hint or compose_names:
+        hint_esc = re.escape(service_name_hint) if service_name_hint else None
 
         def _repl_proxy(m: re.Match) -> str:
             scheme = m.group(1)      # "http://" or "https://"
@@ -84,14 +106,24 @@ def convert_nginx(text: str, service_name_hint: str = "") -> str:
             port_path = m.group(3)   # ":port" and/or "/path", may be empty
             tail = m.group(4)        # ";" or whitespace terminator
 
-            stripped = re.sub(
-                rf'^{hint_esc}[-_]?', '', host, flags=re.IGNORECASE
-            )
-            if stripped != host:
+            # 1) Exact match against a compose service name → replace whole host
+            if compose_names and host.lower() in compose_names:
                 return (
                     f"proxy_pass {scheme}"
-                    f"{{{{ container_prefix }}}}{stripped}{port_path}{tail}"
+                    f"{{{{ container_prefix }}}}{host}{port_path}{tail}"
                 )
+
+            # 2) Prefix match against service_name_hint → strip hint, keep suffix
+            if hint_esc:
+                stripped = re.sub(
+                    rf'^{hint_esc}[-_]?', '', host, flags=re.IGNORECASE
+                )
+                if stripped != host:
+                    return (
+                        f"proxy_pass {scheme}"
+                        f"{{{{ container_prefix }}}}{stripped}{port_path}{tail}"
+                    )
+
             return m.group(0)
 
         text = re.sub(
@@ -112,11 +144,20 @@ def nginx_file_to_template(
     input_path: str,
     output_path: str,
     service_name_hint: str = "",
+    compose_service_names: list[str] | None = None,
 ) -> None:
-    """Convert a plain nginx conf file to a Jinja2 template and write output_path."""
+    """Convert a plain nginx conf file to a Jinja2 template and write output_path.
+
+    Parameters
+    ----------
+    compose_service_names:
+        Service keys from the companion docker-compose.yml.  Passed through to
+        :func:`convert_nginx` so proxy_pass targets matching a compose service
+        name are rewritten to ``{{ container_prefix }}<name>``.
+    """
     src = Path(input_path)
     text = src.read_text()
     hint = service_name_hint or src.stem
     header = make_header(src.name, hint)
-    converted = convert_nginx(text, hint)
+    converted = convert_nginx(text, hint, compose_service_names)
     Path(output_path).write_text(header + converted)

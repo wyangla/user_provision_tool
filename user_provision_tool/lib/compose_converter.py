@@ -7,6 +7,7 @@ Public API
 ----------
 convert(data)                        — pure transform: dict → (dict, src_to_key)
 compose_file_to_template(src, dst)   — file-level convenience wrapper
+get_compose_service_names(path)      — extract service keys from a compose file or template
 make_header(src_to_key, hint)        — produce the comment block for the .j2 file
 
 Transformations applied
@@ -372,3 +373,32 @@ def compose_file_to_template(
         f.write(header + template_body)
 
     return src_to_key
+
+
+def get_compose_service_names(compose_path: str) -> list[str]:
+    """Return the list of service keys from a compose file or .j2 template.
+
+    Jinja2 tokens (``{{ ... }}``) in templates are replaced with placeholder
+    strings before YAML parsing so the file remains parseable.
+    """
+    import yaml as _yaml
+
+    with open(compose_path) as f:
+        raw = f.read()
+
+    # Neutralise Jinja2 expressions so the YAML parser doesn't choke.
+    # Replace the entire {{ expr }} token with a plain word so any adjacent
+    # text (e.g. "{{ prefix }}web") stays a valid YAML key.
+    sanitised = re.sub(r'\{\{.*?\}\}', 'j2placeholder', raw)
+
+    try:
+        data = _yaml.safe_load(sanitised)
+    except _yaml.YAMLError:
+        return []
+
+    if not isinstance(data, dict):
+        return []
+    services = data.get("services")
+    if not isinstance(services, dict):
+        return []
+    return list(services.keys())

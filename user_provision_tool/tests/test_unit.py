@@ -631,6 +631,39 @@ class TestComposeConverter:
         keys = list(src_to_key.values())
         assert len(keys) == len(set(keys)), "Duplicate volume keys generated"
 
+    def test_get_compose_service_names_from_plain_file(self, tmp_path):
+        from lib.compose_converter import get_compose_service_names
+        compose = str(tmp_path / "docker-compose.yml")
+        Path(compose).write_text(
+            "services:\n"
+            "  web:\n"
+            "    image: nginx\n"
+            "  db:\n"
+            "    image: postgres\n"
+        )
+        names = get_compose_service_names(compose)
+        assert names == ["web", "db"]
+
+    def test_get_compose_service_names_from_j2_template(self, tmp_path):
+        from lib.compose_converter import get_compose_service_names
+        compose = str(tmp_path / "docker-compose.yml.j2")
+        Path(compose).write_text(
+            "services:\n"
+            "  {{ container_prefix }}web:\n"
+            "    image: nginx\n"
+            "  db:\n"
+            "    image: postgres\n"
+        )
+        names = get_compose_service_names(compose)
+        assert "db" in names
+
+    def test_get_compose_service_names_invalid_yaml(self, tmp_path):
+        from lib.compose_converter import get_compose_service_names
+        compose = str(tmp_path / "bad.yml")
+        Path(compose).write_text("not: valid: yaml: [[[")
+        names = get_compose_service_names(compose)
+        assert names == []
+
 
 # ---------------------------------------------------------------------------
 # nginx_converter
@@ -733,6 +766,69 @@ class TestNginxConverter:
         assert "{{ hostname }}" in header
         assert "{{ container_prefix }}" in header
         assert "{{ htpasswd_path }}" in header
+
+    def test_convert_proxy_pass_matches_compose_service_name(self):
+        """proxy_pass host matching a compose service name → {{ container_prefix }}<name>."""
+        from lib.nginx_converter import convert_nginx
+        conf = (
+            "server {\n"
+            "    listen 80;\n"
+            "    server_name example.com;\n"
+            "    location / {\n"
+            "        proxy_pass http://mcp-server:8000;\n"
+            "    }\n"
+            "}\n"
+        )
+        out = convert_nginx(conf, compose_service_names=["mcp-server", "db"])
+        assert "proxy_pass http://{{ container_prefix }}mcp-server:8000;" in out
+
+    def test_convert_proxy_pass_matches_compose_service_name_case_insensitive(self):
+        """Service name matching is case-insensitive."""
+        from lib.nginx_converter import convert_nginx
+        conf = (
+            "server {\n"
+            "    listen 80;\n"
+            "    server_name example.com;\n"
+            "    location / {\n"
+            "        proxy_pass http://MCP-Server:8000;\n"
+            "    }\n"
+            "}\n"
+        )
+        out = convert_nginx(conf, compose_service_names=["mcp-server"])
+        assert "proxy_pass http://{{ container_prefix }}MCP-Server:8000;" in out
+
+    def test_convert_proxy_pass_no_match_leaves_unchanged(self):
+        """Host not in compose_service_names and not matching hint is left alone."""
+        from lib.nginx_converter import convert_nginx
+        conf = (
+            "server {\n"
+            "    listen 80;\n"
+            "    server_name example.com;\n"
+            "    location / {\n"
+            "        proxy_pass http://external-api:9000;\n"
+            "    }\n"
+            "}\n"
+        )
+        out = convert_nginx(conf, compose_service_names=["mcp-server"])
+        assert "proxy_pass http://external-api:9000;" in out
+
+    def test_convert_proxy_pass_compose_match_takes_priority_over_hint(self):
+        """Exact compose service name match takes priority over hint prefix match."""
+        from lib.nginx_converter import convert_nginx
+        conf = (
+            "server {\n"
+            "    listen 80;\n"
+            "    server_name example.com;\n"
+            "    location / {\n"
+            "        proxy_pass http://web:80;\n"
+            "    }\n"
+            "}\n"
+        )
+        # "web" is an exact compose service name → replaced as whole
+        out = convert_nginx(conf, service_name_hint="myapp", compose_service_names=["web"])
+        assert "proxy_pass http://{{ container_prefix }}web:80;" in out
+        # It should NOT strip "myapp" prefix (which wouldn't match anyway)
+        assert "myapp" not in out.split("proxy_pass")[1]
 
 
 # ---------------------------------------------------------------------------

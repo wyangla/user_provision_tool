@@ -151,9 +151,9 @@ curl -X POST "http://localhost:8765/users?sync=true" \
 
 ---
 
-## `DELETE /users/{user_name}/services/{service_name}/{label}` — Remove
+## `DELETE /users/{user_name}/services/{service_name}/{label}` — Remove a Service
 
-Runs `docker compose down` then removes the registry entry.
+Runs `docker compose down` then removes **one** registry entry — the specific user + service + label combination. Other services registered by the same user are not affected.
 
 | Mode | Method | Status | Response |
 |---|---|---|---|

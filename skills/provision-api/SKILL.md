@@ -13,9 +13,22 @@ Source project: `_users_provision/` (under the workspace root).
 
 ---
 
+## ⛔ CRITICAL: Never modify original source files
+
+**Do NOT edit the user's original `docker-compose.yml` or `nginx.conf`.** These are the
+user's source-of-truth files. The provision tool's auto-converter reads them and writes
+`.j2` templates alongside them — it never modifies the originals.  If you need to make
+changes, create a **new** file (e.g. `docker-compose.provision.yml`) and reference that
+instead, or explain the change and let the user decide.
+
+---
+
 ## Quick Reference (curl commands)
 
 All examples assume the provision-api is running on `http://localhost:8765`.
+
+All operations (register, rebuild, remove) return a `task_id` immediately.
+Poll `GET /tasks/{task_id}` for progress; the result appears when status reaches `completed`.
 
 ### Health check
 
@@ -39,29 +52,43 @@ curl -X POST http://localhost:8765/users \
     "domain": "example.com",
     "passwd": "secret"
   }'
-# → 201 with registration entry
+# → 202 {"task_id": "a1b2c3d4e5f6", "status": "pending", "type": "register"}
 ```
 
-**Key parameters:**
+### Register with proxy build args
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `user_name` | string | ✓ | `[a-zA-Z0-9_]+` |
-| `service_name` | string | ✓ | `[a-zA-Z0-9_]+` |
-| `project_root` | string | — | Bare name resolves to `$SOURCE_PROJECTS_DIR/{name}` (= `$PROVISION_DIR/source_projects/{name}`). Relative or absolute path used as-is. Returns 404 if dir not found. |
-| `compose_file_path` | string | † | Plain `docker-compose.yml` filename (auto-converted to `.j2` template) |
-| `compose_template_path` | string | † | Pre-made `.j2` compose template filename |
-| `nginx_conf_file_path` | string | — | Plain nginx conf filename (auto-converted to `.j2` template) |
-| `nginx_conf_template_path` | string | — | Pre-made `.j2` nginx conf template filename |
-| `env_file_path` | string | — | `.env` filename for Docker Compose `${VAR}` substitution |
-| `label` | string | — | Digits only; default `"0"` |
-| `domain` | string | — | Domain for `server_name`; default `"localhost"` |
-| `passwd` | string | — | Default `"123456"`. Pass `""` to disable HTTP basic auth entirely. |
-| `volumes` | object | — | `{ "template_vol_key": "/host/path", ... }` |
+```bash
+curl -X POST http://localhost:8765/users \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user_name": "alice",
+    "service_name": "myapp",
+    "project_root": "myapp",
+    "compose_file_path": "docker-compose.yml",
+    "build_args": {
+      "HTTP_PROXY": "http://proxy:8080",
+      "HTTPS_PROXY": "http://proxy:8080"
+    }
+  }'
+```
 
-> † Exactly one of `compose_file_path` or `compose_template_path` is required.
+### Poll task status
 
-**Response codes:** 201 (success), 404 (not found), 409 (duplicate), 422 (validation), 500 (docker compose up failed).
+```bash
+curl http://localhost:8765/tasks/a1b2c3d4e5f6
+# → {"task_id": "a1b2c3d4e5f6", "type": "register", "status": "completed", "result": {...}}
+
+# List all tasks
+curl http://localhost:8765/tasks
+# → {"count": 3, "tasks": [...]}
+```
+
+### Cancel a task
+
+```bash
+curl -X DELETE http://localhost:8765/tasks/a1b2c3d4e5f6
+# → {"task_id": "a1b2c3d4e5f6", "status": "cancelled"}
+```
 
 ### Get all users status
 
@@ -81,13 +108,72 @@ curl http://localhost:8765/users/alice
 curl -X POST http://localhost:8765/users/alice/services/myapp/0/rebuild \
   -H 'Content-Type: application/json' \
   -d '{"no_cache": true}'
+# → 202 {"task_id": "c3d4e5f6a7b8", "status": "pending", "type": "rebuild"}
 ```
 
-### Remove (deregister) a user
+### Rebuild with proxy build args
+
+```bash
+curl -X POST http://localhost:8765/users/alice/services/myapp/0/rebuild \
+  -H 'Content-Type: application/json' \
+  -d '{"no_cache": true, "build_args": {"HTTP_PROXY": "http://proxy:8080"}}'
+```
+
+### Remove (deregister) a user's service
+
+Removes **one** registration entry — the specific user + service + label combination.
+A user registered with multiple services or labels is not affected; only the targeted
+instance is torn down.
 
 ```bash
 curl -X DELETE http://localhost:8765/users/alice/services/myapp/0
+# → 202 {"task_id": "b2c3d4e5f6a7", "status": "pending", "type": "remove"}
 ```
+
+---
+
+## Request Parameters
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `user_name` | string | ✓ | `[a-zA-Z0-9_]+` |
+| `service_name` | string | ✓ | `[a-zA-Z0-9_]+` |
+| `project_root` | string | — | Bare name resolves to `$SOURCE_PROJECTS_DIR/{name}`. Relative/absolute path used as-is. 404 if not found. |
+| `compose_file_path` | string | † | Plain `docker-compose.yml` → auto-converted to `.j2` template |
+| `compose_template_path` | string | † | Pre-made `.j2` compose template filename |
+| `nginx_conf_file_path` | string | — | Plain nginx conf → auto-converted to `.j2` template |
+| `nginx_conf_template_path` | string | — | Pre-made `.j2` nginx conf template filename |
+| `env_file_path` | string | — | `.env` file for Docker Compose `${VAR}` substitution |
+| `label` | string | — | Digits only; default `"0"` |
+| `domain` | string | — | Domain for `server_name`; default `"localhost"` |
+| `passwd` | string | — | Default `"123456"`. Pass `""` to disable HTTP basic auth entirely. |
+| `volumes` | object | — | `{ "template_vol_key": "/host/path", ... }` |
+| `build_args` | object | — | `{ "HTTP_PROXY": "http://proxy:8080", ... }` — passed as `--build-arg` to `docker compose build`. Stored in registry. |
+| `no_cache` | bool | — | (rebuild only) Pass `--no-cache` to `docker compose build` |
+
+> † Exactly one of `compose_file_path` or `compose_template_path` is required.
+
+## Response Codes
+
+| Endpoint | Success | Error codes |
+|---|---|---|
+| `POST /users` | `202` → `task_id` | `404`, `422` |
+| `DELETE /users/...` | `202` → `task_id` | `404` |
+| `POST .../rebuild` | `202` → `task_id` | `404` |
+| `GET /users`, `GET /users/{name}` | `200` | `404` |
+| `GET /tasks` | `200` | — |
+| `GET /tasks/{id}` | `200` | `404` |
+| `DELETE /tasks/{id}` | `200` | `404`, `409` |
+
+## Task Lifecycle
+
+```
+pending → running → completed
+                  → failed   (error stored in task)
+                  → cancelled (via DELETE /tasks/{id})
+```
+
+Tasks auto-clean after 1 hour. Poll `GET /tasks/{task_id}` for the `status` field.
 
 ---
 
@@ -195,9 +281,20 @@ directory that will become `project_root`). This is because:
 
 ## Creating nginx.conf when none is provided
 
-When a target repo has no `nginx.conf` that works with the provision tool, create one using
-the template below. Place it inside the project root (same directory as the Dockerfile and
-`docker-compose.yml`).
+When a target repo has no `nginx.conf`, generate one **at the beginning** — before
+registering any users.  Read the `docker-compose.yml` directly to discover the service
+name(s) and internal port(s), then create the nginx conf.
+
+1. **Read the compose file** — inspect `docker-compose.yml` to find the **service name**
+   (the key under `services:`) and the internal port (from `expose:` or the Dockerfile).
+
+2. **Generate the nginx.conf** — using the service name from step 1, create the nginx conf
+   with the correct `proxy_pass` target.  Place it inside the project root (same directory
+   as the Dockerfile and `docker-compose.yml`).
+
+The `proxy_pass` target must use the **service name** (the Docker Compose service key),
+which Docker's internal DNS resolves to the container IP.  The provision tool's converter
+will prefix it with `{{ container_prefix }}`.
 
 ### Nginx conf template
 
@@ -209,7 +306,7 @@ server {
     server_name {service_name}_hostname;
 
     location / {
-        proxy_pass http://{container_name_or_service};
+        proxy_pass http://{service_name}:{internal_port};
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -229,9 +326,17 @@ server {
 | Placeholder | What to put | Converter does |
 |---|---|---|
 | `{service_name}_hostname` | E.g. `myapp_hostname` | Replaced with `{{ hostname }}` → `{service}-{user}-{label}.{domain}` |
-| `{container_name_or_service}` | Container name from compose, e.g. `myapp-web:8080` | Prefix replaced with `{{ container_prefix }}` → `myapp-user_alice-0-web:8080` |
+| `{service_name}` | **Service name from compose file** (the key under `services:`), e.g. `mcp-server` — read directly from `docker-compose.yml` | Prefixed with `{{ container_prefix }}` → `mcp_server_for_remote_graphiti-user_alice-0-mcp-server` |
+| `{internal_port}` | The internal port the service listens on, e.g. `8000` — from `expose:` or the Dockerfile | Left as-is |
 
 ### Converter behavior (what happens automatically)
+
+- **`proxy_pass` service-name detection** — the converter reads the companion
+  `docker-compose.yml` and automatically detects when a `proxy_pass` host matches a
+  compose service name.  Those hosts are rewritten to `{{ container_prefix }}<name>`
+  so they resolve to the actual deployed container name at render time.  You can
+  simply write `proxy_pass http://<compose-service-name>:<port>;` and the converter
+  handles the rest.
 
 - **`auth_basic` injection** — if the source conf has no `auth_basic` directives, the
   converter automatically injects `auth_basic "{{ service_name }} - {{ user_name }}";`

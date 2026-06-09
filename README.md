@@ -16,7 +16,7 @@ a source project directory. When a user registers, the tool:
 2. **Renders** isolated `docker-compose.user-{user}.{label}.yml` and `*.nginx.conf` for that user
 3. **Starts** the containers with `docker compose up --project-name {isolated-name}`
 4. **Routes** HTTP traffic by connecting `provision-nginx` to the user's Docker network and reloading nginx live
-5. **Tracks** state in `user_registry.yml` — remove a user and everything is torn down cleanly
+5. **Tracks** state in `user_registry.yml` — remove a user's service and its containers are torn down cleanly
 
 Per-user container names: `{service}-user_{user}-{label}-{svc}`
 Per-user hostnames: `{service}-{user}-{label}.{domain}`

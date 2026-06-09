@@ -215,9 +215,10 @@ def remove_user(
     Steps
     -----
     1. Disconnect provision-nginx from the user's network.
-    2. ``docker compose down``.
-    3. Reload provision-nginx.
-    4. Remove registry entry.
+    2. ``docker compose down`` (falls back to project-name if compose file missing).
+    3. Remove generated files (nginx conf, htpasswd, compose file).
+    4. Reload provision-nginx.
+    5. Remove registry entry.
 
     Raises
     ------
@@ -226,6 +227,9 @@ def remove_user(
     RuntimeError
         If ``docker compose down`` fails.
     """
+    import logging
+    _log = logging.getLogger(__name__)
+
     entry = registry.get_user_service(user_name, service_name, label)
     if not entry:
         raise KeyError(
@@ -234,13 +238,47 @@ def remove_user(
 
     compose_file = entry.get("compose_file_path", "")
     net = entry.get("network_name", "")
+    project_name = entry.get("network_name")
+
+    # Resolve env_file to absolute path (registry stores it relative to project)
+    env_file = entry.get("env_file_path") or None
+    if env_file and not Path(env_file).is_absolute():
+        # Reconstruct absolute path from the compose template directory
+        compose_tpl = entry.get("compose_template_path", "")
+        if compose_tpl:
+            env_file = str(Path(compose_tpl).parent / env_file)
 
     # Disconnect nginx before compose_down so Docker can remove the network
     if net:
         docker_ops.network_disconnect(nginx_container, net)
 
-    if compose_file and Path(compose_file).exists():
-        docker_ops.compose_down(compose_file, env_file=entry.get("env_file_path") or None, project_name=entry.get("network_name"))
+    # Tear down containers: prefer compose file, fall back to project name.
+    # NOTE: --env-file is intentionally NOT passed to compose_down — it is only
+    # needed for variable substitution during 'up', and a missing env file should
+    # never block teardown.
+    compose_exists = compose_file and Path(compose_file).exists()
+    if compose_exists:
+        docker_ops.compose_down(compose_file, project_name=project_name)
+    elif project_name:
+        _log.warning(
+            "Compose file %s not found for %s/%s/%s — attempting down by project name %s",
+            compose_file, user_name, service_name, label, project_name,
+        )
+        docker_ops.compose_down_by_project(project_name)
+    else:
+        _log.warning(
+            "No compose file or project name for %s/%s/%s — skipping container teardown",
+            user_name, service_name, label,
+        )
+
+    # Remove generated files
+    for key in ("compose_file_path", "nginx_conf_path", "htpasswd_path"):
+        fpath = entry.get(key, "")
+        if fpath:
+            try:
+                Path(fpath).unlink(missing_ok=True)
+            except OSError:
+                pass
 
     docker_ops.nginx_reload(nginx_container)
 

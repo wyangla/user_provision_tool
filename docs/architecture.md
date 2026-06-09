@@ -48,7 +48,7 @@ user_provision_tool/
 ├── cli/                           # CLI entry points (direct/scripted use)
 │   ├── __init__.py
 │   ├── register.py                # Register user + start containers
-│   ├── remove.py                  # Stop + deregister user
+│   ├── remove.py                  # Stop + deregister a user's service
 │   ├── rebuild.py                 # Rebuild user containers
 │   ├── status.py                  # Query container health
 │   ├── gen_compose_template.py    # Convert plain compose file → .j2 template
@@ -106,7 +106,7 @@ user_provision_tool/
 | `docker_ops.py` | `compose_up`, `compose_down`, `compose_build`, `docker_ps`, `network_connect`, `network_disconnect`, `nginx_reload` wrappers; real-time stdout/stderr via `subprocess.Popen` + threading; supports `--build-arg` for proxy; writes to `DOCKER_OPS_LOG` file when env var is set |
 | `provisioner.py` | Shared workflow for register/remove/rebuild; supports `build_args` (proxy) passed through to docker_ops; both `api.py` and `cli/` delegate here |
 | `compose_converter.py` | Parse a plain `docker-compose.yml` and emit a Jinja2 `.yml.j2` template; services with named profiles are excluded; `profiles:` key is stripped from kept services |
-| `nginx_converter.py` | Apply regex substitutions to a plain nginx conf and emit a `.j2` template; injects `auth_basic` + `auth_basic_user_file` directives before the first `proxy_pass` if none are already present |
+| `nginx_converter.py` | Apply regex substitutions to a plain nginx conf and emit a `.j2` template; injects `auth_basic` + `auth_basic_user_file` directives before the first `proxy_pass` if none are already present; detects when a `proxy_pass` host matches a compose service name and rewrites it to `{{ container_prefix }}<name>` |
 | `task_manager.py` | In-memory async task pool (`ThreadPoolExecutor`); submit → status → cancel lifecycle; powers `GET /tasks`, `GET /tasks/{id}`, `DELETE /tasks/{id}` endpoints |
 
 ---

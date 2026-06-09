@@ -108,7 +108,7 @@ python cli/register.py \
 
 ---
 
-## `cli/remove.py` — Remove a user
+## `cli/remove.py` — Remove a user's service
 
 Stop containers and deregister a user's service.
 
@@ -233,6 +233,7 @@ Equivalent to using `-fn` in `register.py` but without registering a user.
 | `input` | ✓ | Path to the source nginx conf file |
 | `-o` / `--output` | — | Output path; defaults to `<input-stem>.nginx.conf.j2` in the same directory |
 | `-s` / `--service-name` | — | Service name hint for rewriting `proxy_pass` container names (default: input file stem) |
+| `-c` / `--compose-file` | — | Path to the companion `docker-compose.yml` (or `.j2` template). When a `proxy_pass` host matches one of the compose service names, it is automatically rewritten to `{{ container_prefix }}<name>` |
 
 ### Example
 
@@ -241,6 +242,12 @@ python cli/gen_nginx_template.py \
   source_projects/myapp/nginx.conf \
   -s myapp
 # writes source_projects/myapp/nginx.conf.j2
+
+# With compose file for service name detection:
+python cli/gen_nginx_template.py \
+  source_projects/myapp/nginx.conf \
+  -s myapp \
+  -c source_projects/myapp/docker-compose.yml
 ```
 
 ---

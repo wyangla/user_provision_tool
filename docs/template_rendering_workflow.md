@@ -36,7 +36,8 @@ source_project/service_1/          ← project root (-pr), resolved from bare na
 │                           • exclude named-profile services  │  │                                                             │
 │                           • bind sources  → JINJA2TOKxxx    │  │  auth_basic_user_file  path    → {{ htpasswd_path }}        │
 │                           • networks      → JINJA2TOKxxx    │  │  proxy_pass            myapp-X → {{ container_prefix }}X   │
-│                           • named volumes → JINJA2TOKxxx    │  │           (only host prefixed with service name hint)      │
+│                           • named volumes → JINJA2TOKxxx    │  │           (host prefixed with service name hint, OR        │
+│                                   │                         │  │            exact match against a compose service name)     │
 │                                   │                         │  │                                                             │
 │                          yaml.dump (no {{ }} quoting)       │  │       nginx.prod.conf.j2  ◄── written into -pr             │
 │                                   │                         │  └─────────────────────────────────────────────────────────────┘

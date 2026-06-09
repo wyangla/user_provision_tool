@@ -89,6 +89,15 @@ def compose_down(compose_file: str, env_file: str | None = None, project_name: s
     _run(_compose_base(compose_file, env_file, project_name) + ["down"])
 
 
+def compose_down_by_project(project_name: str) -> None:
+    """Tear down a Compose project by project name alone (no compose file needed).
+
+    Useful as a fallback when the per-user compose file has been lost but the
+    containers and networks still exist under *project_name*.
+    """
+    _run(["docker", "compose", "-p", project_name, "down", "--remove-orphans"])
+
+
 def compose_build(compose_file: str, no_cache: bool = False, env_file: str | None = None, project_name: str | None = None, build_args: dict[str, str] | None = None) -> None:
     cmd = _compose_base(compose_file, env_file, project_name) + ["build"]
     if no_cache:
