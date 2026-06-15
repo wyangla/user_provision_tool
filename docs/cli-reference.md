@@ -28,7 +28,7 @@ Start a user's containers from a Jinja2 compose template.
 | `--nginx-template` | `-tn` | — | Filename of an existing `.j2` nginx conf template inside project root |
 | `--nginx-file` | `-fn` | — | Filename of a plain nginx conf inside project root; auto-converted to `.j2` |
 | `--volume` | `-v` | — | `KEY=VALUE` volume mapping (repeatable) |
-| `--env-file` | `-e` | — | Path to a `.env` file for Docker Compose variable substitution |
+| `--env-file` | `-e` | — | Path to a `.env` file. Copied as `.env.{user_name}.{label}` next to the generated compose file. Any `env_file: .env` directives in the compose template are automatically replaced with this per-user file name at render time. |
 | `--label` | `-l` | — | Digits only; default `0` |
 | `--domain` | `-d` | — | Domain for nginx `server_name`; default `localhost` |
 | `--build-arg` | — | — | `KEY=VALUE` (repeatable). Passed as `--build-arg` to `docker compose build` which runs before `compose up` when provided. Stored in registry for future rebuilds. |
@@ -50,7 +50,7 @@ parse args
   ├─ provisioner.register_user()
   │       ├─ append entry to user_registry.yml
   │       ├─ render docker-compose.user-{user}.{label}.yml  → project root
-  │       ├─ copy .env next to compose file  (if --env-file given)
+  │       ├─ copy .env → .env.{user}.{label} + rewrite env_file: refs  (if --env-file given)
   │       ├─ render nginx conf + write .htpasswd  → GENERATED_DIR  (if -tn/-fn given)
   │       ├─ docker compose up -d
   │       └─ docker network connect + nginx reload

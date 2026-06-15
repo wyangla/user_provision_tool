@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 import yaml
 
-from lib import auth, docker_ops, registry, template_engine, validation
+from lib import auth, docker_ops, provisioner, registry, template_engine, validation
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 COMPOSE_TEMPLATE = str(FIXTURES_DIR / "docker-compose.template.yml.j2")
@@ -313,6 +313,202 @@ class TestTemplateEngine:
         nets_alice = set(d_alice["networks"].keys())
         nets_bob = set(d_bob["networks"].keys())
         assert nets_alice.isdisjoint(nets_bob), "Two different users must not share a network"
+
+    # --- env_file handling ---
+
+    def test_render_compose_env_file_copied_with_per_user_name(self, tmp_path):
+        """env_file is copied as .env.{user_name}.{label} next to the compose file."""
+        env_src = tmp_path / "custom.env"
+        env_src.write_text("FOO=bar\n")
+
+        template = tmp_path / "dc.yml.j2"
+        template.write_text("""services:
+  web:
+    image: nginx:alpine
+    container_name: {{ container_prefix }}web
+    env_file: .env
+    networks:
+      - {{ network_name }}
+networks:
+  {{ network_name }}:
+    name: {{ network_name }}
+""")
+
+        out = str(tmp_path / "dc.user-alice.0.yml")
+        copied = template_engine.render_compose(
+            str(template), out,
+            user_name="alice", service_name="myapp", label="0",
+            volumes={}, env_file=str(env_src),
+        )
+
+        assert copied is not None
+        assert copied.endswith(".env.alice.0")
+        assert Path(copied).exists()
+        assert Path(copied).read_text() == "FOO=bar\n"
+
+    def test_render_compose_env_file_string_form_replaced(self, tmp_path):
+        """env_file: .env (string form) is replaced with per-user env file name."""
+        env_src = tmp_path / "my.env"
+        env_src.write_text("KEY=val\n")
+
+        template = tmp_path / "dc.yml.j2"
+        template.write_text("""services:
+  web:
+    image: nginx:alpine
+    container_name: {{ container_prefix }}web
+    env_file: .env
+    networks:
+      - {{ network_name }}
+networks:
+  {{ network_name }}:
+    name: {{ network_name }}
+""")
+
+        out = str(tmp_path / "dc.user-bob.1.yml")
+        template_engine.render_compose(
+            str(template), out,
+            user_name="bob", service_name="myapp", label="1",
+            volumes={}, env_file=str(env_src),
+        )
+
+        content = Path(out).read_text()
+        assert "env_file: .env.bob.1" in content
+        assert "env_file: .env\n" not in content  # original replaced
+        # .env.bob.1 file exists
+        assert (tmp_path / ".env.bob.1").exists()
+
+    def test_render_compose_env_file_list_form_replaced(self, tmp_path):
+        """env_file: list form - .env is replaced with per-user env file name."""
+        env_src = tmp_path / "app.env"
+        env_src.write_text("KEY=val\n")
+
+        template = tmp_path / "dc.yml.j2"
+        template.write_text("""services:
+  web:
+    image: nginx:alpine
+    container_name: {{ container_prefix }}web
+    env_file:
+      - .env
+    networks:
+      - {{ network_name }}
+networks:
+  {{ network_name }}:
+    name: {{ network_name }}
+""")
+
+        out = str(tmp_path / "dc.user-eve.2.yml")
+        template_engine.render_compose(
+            str(template), out,
+            user_name="eve", service_name="myapp", label="2",
+            volumes={}, env_file=str(env_src),
+        )
+
+        content = Path(out).read_text()
+        assert "- .env.eve.2" in content
+        assert "- .env\n" not in content  # original replaced
+        assert (tmp_path / ".env.eve.2").exists()
+
+    def test_render_compose_env_file_list_with_multiple_items(self, tmp_path):
+        """Only .env entries in env_file list are replaced; other entries untouched."""
+        env_src = tmp_path / "main.env"
+        env_src.write_text("KEY=val\n")
+
+        template = tmp_path / "dc.yml.j2"
+        template.write_text("""services:
+  web:
+    image: nginx:alpine
+    container_name: {{ container_prefix }}web
+    env_file:
+      - .env
+      - shared.env
+    networks:
+      - {{ network_name }}
+networks:
+  {{ network_name }}:
+    name: {{ network_name }}
+""")
+
+        out = str(tmp_path / "dc.user-alice.0.yml")
+        template_engine.render_compose(
+            str(template), out,
+            user_name="alice", service_name="myapp", label="0",
+            volumes={}, env_file=str(env_src),
+        )
+
+        content = Path(out).read_text()
+        assert "- .env.alice.0" in content
+        assert "- shared.env" in content   # untouched
+        assert "- .env\n" not in content   # original .env replaced
+
+    def test_render_compose_no_env_file_leaves_dotenv_unchanged(self, tmp_path):
+        """Without env_file, .env references are NOT replaced."""
+        template = tmp_path / "dc.yml.j2"
+        template.write_text("""services:
+  web:
+    image: nginx:alpine
+    container_name: {{ container_prefix }}web
+    env_file: .env
+    networks:
+      - {{ network_name }}
+networks:
+  {{ network_name }}:
+    name: {{ network_name }}
+""")
+
+        out = str(tmp_path / "dc.user-alice.0.yml")
+        template_engine.render_compose(
+            str(template), out,
+            user_name="alice", service_name="myapp", label="0",
+            volumes={}, env_file=None,
+        )
+
+        content = Path(out).read_text()
+        # .env remains as-is when no env_file is supplied
+        assert "env_file: .env" in content
+        assert ".env.alice.0" not in content
+
+    def test_render_compose_two_users_env_files_isolated(self, tmp_path):
+        """Two users with different env files get isolated per-user copies."""
+        env_a = tmp_path / "a.env"
+        env_a.write_text("USER=a\n")
+        env_b = tmp_path / "b.env"
+        env_b.write_text("USER=b\n")
+
+        template = tmp_path / "dc.yml.j2"
+        template.write_text("""services:
+  web:
+    image: nginx:alpine
+    container_name: {{ container_prefix }}web
+    env_file: .env
+    networks:
+      - {{ network_name }}
+networks:
+  {{ network_name }}:
+    name: {{ network_name }}
+""")
+
+        out_a = str(tmp_path / "dc.user-alice.0.yml")
+        out_b = str(tmp_path / "dc.user-bob.0.yml")
+
+        copied_a = template_engine.render_compose(
+            str(template), out_a,
+            user_name="alice", service_name="myapp", label="0",
+            volumes={}, env_file=str(env_a),
+        )
+        copied_b = template_engine.render_compose(
+            str(template), out_b,
+            user_name="bob", service_name="myapp", label="0",
+            volumes={}, env_file=str(env_b),
+        )
+
+        # Each user gets their own env file
+        assert copied_a != copied_b
+        assert Path(copied_a).read_text() == "USER=a\n"
+        assert Path(copied_b).read_text() == "USER=b\n"
+
+        # Each rendered compose references its own env file
+        assert "env_file: .env.alice.0" in Path(out_a).read_text()
+        assert "env_file: .env.bob.0" in Path(out_b).read_text()
 
 
 # ---------------------------------------------------------------------------
@@ -869,6 +1065,153 @@ class TestProvisioner:
         user_data = tmp_path / "user_data"
         _auto_volumes(COMPOSE_TEMPLATE, "alice", "myapp", "0", user_data)
         _auto_volumes(COMPOSE_TEMPLATE, "alice", "myapp", "0", user_data)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# provisioner — env_file_path registry storage + rebuild
+# ---------------------------------------------------------------------------
+
+
+class TestProvisionerEnvFile:
+    """Verify env_file_path flows through register_user → registry → rebuild."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch, tmp_path):
+        """Mock docker / nginx calls, redirect registry to temp file."""
+        # Mock docker ops subprocess so no real Docker calls happen
+        self.calls: list[list[str]] = []
+
+        def fake_run(args, check=True):
+            self.calls.append(list(args))
+            import subprocess as sp
+            return sp.CompletedProcess(args, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(docker_ops, "_run", fake_run)
+        # Mock network connect / nginx reload (no-op)
+        monkeypatch.setattr(docker_ops, "network_connect", lambda *a, **kw: None)
+        monkeypatch.setattr(docker_ops, "nginx_reload", lambda *a: None)
+
+        # Redirect registry to temp file
+        self.reg_path = tmp_path / "user_registry.yml"
+        monkeypatch.setattr(registry, "REGISTRY_FILE", self.reg_path)
+        self.tmp_path = tmp_path
+        self.user_data_dir = tmp_path / "user_data"
+        self.user_data_dir.mkdir()
+
+    # ── register_user ──────────────────────────────────────────
+
+    def test_register_stores_per_user_env_copy_in_registry(self):
+        """Registry stores the per-user copied env path, not the original."""
+        env_src = self.tmp_path / "custom.env"
+        env_src.write_text("FOO=bar\n")
+
+        provisioner.register_user(
+            user_name="envuser",
+            service_name="myapp",
+            label="0",
+            compose_template=COMPOSE_TEMPLATE,
+            output_dir=self.tmp_path,
+            user_data_dir=self.user_data_dir,
+            env_file=str(env_src),
+        )
+        entry = registry.get_user_service("envuser", "myapp", "0")
+        assert entry is not None
+
+        stored = entry.get("env_file_path") or ""
+        assert ".env.envuser.0" in stored, (
+            f"Registry should store per-user copy .env.envuser.0, got: {stored}"
+        )
+        assert "custom.env" not in stored, (
+            f"Registry should NOT store original custom.env, got: {stored}"
+        )
+        assert Path(stored).exists(), f"Per-user env file not found: {stored}"
+        assert Path(stored).read_text() == "FOO=bar\n"
+
+    def test_register_without_env_file_has_null_env_file_path(self):
+        """Without env_file, registry env_file_path should be None."""
+        provisioner.register_user(
+            user_name="noenv",
+            service_name="myapp",
+            label="0",
+            compose_template=COMPOSE_TEMPLATE,
+            output_dir=self.tmp_path,
+            user_data_dir=self.user_data_dir,
+        )
+        entry = registry.get_user_service("noenv", "myapp", "0")
+        assert entry is not None
+        stored = entry.get("env_file_path") or None
+        assert stored is None, f"Expected None, got: {stored}"
+
+    def test_register_compose_up_uses_per_user_env_file(self):
+        """The --env-file flag to compose_up points to the per-user copy."""
+        env_src = self.tmp_path / "app.env"
+        env_src.write_text("KEY=val\n")
+
+        provisioner.register_user(
+            user_name="copyuser",
+            service_name="myapp",
+            label="1",
+            compose_template=COMPOSE_TEMPLATE,
+            output_dir=self.tmp_path,
+            user_data_dir=self.user_data_dir,
+            env_file=str(env_src),
+        )
+
+        up_calls = [c for c in self.calls if "up" in c]
+        assert len(up_calls) >= 1, "compose_up should have been called"
+        up_cmd = up_calls[-1]
+        # Find --env-file argument
+        for i, arg in enumerate(up_cmd):
+            if arg == "--env-file" and i + 1 < len(up_cmd):
+                env_path = up_cmd[i + 1]
+                assert ".env.copyuser.1" in env_path, (
+                    f"--env-file should point to per-user copy, got: {env_path}"
+                )
+                assert "app.env" not in env_path, (
+                    f"--env-file should NOT use original name, got: {env_path}"
+                )
+                break
+        else:
+            pytest.fail(f"--env-file not found in compose_up: {up_cmd}")
+
+    # ── rebuild_user ───────────────────────────────────────────
+
+    def test_rebuild_uses_per_user_env_from_registry(self):
+        """Rebuild reads per-user env_file_path from registry and uses it."""
+        env_src = self.tmp_path / "prod.env"
+        env_src.write_text("MODE=production\n")
+
+        provisioner.register_user(
+            user_name="rebuildenv",
+            service_name="myapp",
+            label="0",
+            compose_template=COMPOSE_TEMPLATE,
+            output_dir=self.tmp_path,
+            user_data_dir=self.user_data_dir,
+            env_file=str(env_src),
+        )
+        self.calls.clear()
+
+        provisioner.rebuild_user(
+            user_name="rebuildenv",
+            service_name="myapp",
+            label="0",
+        )
+
+        env_calls = [c for c in self.calls if "--env-file" in c]
+        assert len(env_calls) >= 1, (
+            f"Rebuild should pass --env-file, got calls: {self.calls}"
+        )
+        for cmd in env_calls:
+            for i, arg in enumerate(cmd):
+                if arg == "--env-file" and i + 1 < len(cmd):
+                    env_path = cmd[i + 1]
+                    assert ".env.rebuildenv.0" in env_path, (
+                        f"Rebuild --env-file should use per-user copy, got: {env_path}"
+                    )
+                    assert "prod.env" not in env_path, (
+                        f"Rebuild --env-file should NOT use original, got: {env_path}"
+                    )
 
 
 # ---------------------------------------------------------------------------

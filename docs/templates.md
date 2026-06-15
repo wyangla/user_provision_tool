@@ -105,20 +105,26 @@ server {
 If you supply an `.env` file path at registration time (`env_file_path` in the API,
 `--env-file` in the CLI), the tool:
 
-1. Copies the `.env` file next to the rendered compose file (in the project root).
+1. Copies the `.env` file next to the rendered compose file with a per-user unique name
+   (``.env.{user_name}.{label}``) so that multiple users in the same project directory
+   don't collide.
 2. Passes `--env-file <copied-path>` to every `docker compose` invocation for that service.
+3. **Automatically replaces** any ``env_file: .env`` directive in service definitions (both
+   string and list forms) with the per-user env file name, so containers load environment
+   variables from the correct file.
 
 ```
 Registration
   ├─ template rendered → source_projects/myapp/docker-compose.user-alice.0.yml
-  └─ .env copied       → source_projects/myapp/myapp.env
+  ├─ .env copied       → source_projects/myapp/.env.alice.0
+  └─ env_file: .env    → env_file: .env.alice.0  (rewritten in rendered compose)
 
-docker compose -f ...docker-compose.user-alice.0.yml --env-file ...myapp.env up -d
+docker compose -f ...docker-compose.user-alice.0.yml --env-file .../.env.alice.0 up -d
                                                       └─ resolves ${ENV_VAR} at start
 ```
 
-The `.env` path stored in the registry always points to the **copied** file in the project
-root, so `compose_up`, `compose_down`, and `compose_build` all use the same resolved path.
+The `.env` path stored in the registry always points to the **copied** per-user file, so
+``compose_up``, ``compose_down``, and ``compose_build`` all use the same resolved path.
 
 ---
 

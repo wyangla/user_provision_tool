@@ -101,7 +101,7 @@ user_provision_tool/
 |---|---|
 | `validation.py` | Enforce `[a-zA-Z0-9_]` for names, `[0-9]` for label; raise `ValidationError` |
 | `registry.py` | Load/save `user_registry.yml`; add/remove/query entries by user+service+label |
-| `template_engine.py` | Extract template volumes; render compose and nginx files via Jinja2; copy `.env` alongside output |
+| `template_engine.py` | Extract template volumes; render compose and nginx files via Jinja2; copy `.env` as per-user file + rewrite `env_file:` refs |
 | `auth.py` | `getpass` prompt; bcrypt hash via `passlib.hash.bcrypt`; write `.htpasswd` file |
 | `docker_ops.py` | `compose_up`, `compose_down`, `compose_build`, `docker_ps`, `network_connect`, `network_disconnect`, `nginx_reload` wrappers; real-time stdout/stderr via `subprocess.Popen` + threading; supports `--build-arg` for proxy; writes to `DOCKER_OPS_LOG` file when env var is set |
 | `provisioner.py` | Shared workflow for register/remove/rebuild; supports `build_args` (proxy) passed through to docker_ops; both `api.py` and `cli/` delegate here |
@@ -145,7 +145,7 @@ Input: user_name, service_name, label, volumes, passwd, template paths, env_file
   │       │
   │       ├─ template_engine.py ── render docker-compose.user-{user}.{label}.yml
   │       │       └─ written into project root (source dir, next to Dockerfile)
-  │       │       └─ env_file provided? → copy .env next to compose file
+  │       │       └─ env_file provided? → copy as .env.{user}.{label} + rewrite env_file: .env refs
   │       │
   │       ├─ template_engine.py ── render {svc}.user-{user}.{label}.nginx.conf  (optional)
   │       │       └─ written into GENERATED_DIR
@@ -192,7 +192,7 @@ Input: user_name, service_name, label
 | Compose file | `docker-compose.user-{user_name}.{label}.yml` |
 | Nginx conf | `{service_name}.user-{user_name}.{label}.nginx.conf` |
 | htpasswd file | `{service_name}.user-{user_name}.{label}.htpasswd` |
-| Copied env file | `{env_file_basename}` (placed next to compose file) |
+| Copied env file | `.env.{user_name}.{label}` (placed next to compose file) |
 | Container prefix | `{service_name}-user_{user_name}-{label}-` |
 | Nginx hostname | `{service_name}-{user_name}-{label}.{domain_name}` |
 

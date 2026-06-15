@@ -143,13 +143,13 @@ curl -X DELETE http://localhost:8765/users/alice/services/myapp/0
 | `compose_template_path` | string | † | Pre-made `.j2` compose template filename |
 | `nginx_conf_file_path` | string | — | Plain nginx conf → auto-converted to `.j2` template |
 | `nginx_conf_template_path` | string | — | Pre-made `.j2` nginx conf template filename |
-| `env_file_path` | string | — | `.env` file for Docker Compose `${VAR}` substitution |
+| `env_file_path` | string | — | `.env` file for Docker Compose `${VAR}` substitution. Copied as `.env.{user}.{label}` next to the generated compose file. Any `env_file: .env` directives in service definitions are automatically replaced with this per-user file name. |
 | `label` | string | — | Digits only; default `"0"` |
 | `domain` | string | — | Domain for `server_name`; default `"localhost"` |
 | `passwd` | string | — | Default `"123456"`. Pass `""` to disable HTTP basic auth entirely. |
 | `volumes` | object | — | `{ "template_vol_key": "/host/path", ... }` |
 | `build_args` | object | — | `{ "HTTP_PROXY": "http://proxy:8080", ... }` — passed as `--build-arg` to `docker compose build`. Stored in registry. |
-| `no_cache` | bool | — | (rebuild only) Pass `--no-cache` to `docker compose build` |
+| `no_cache` | bool | — | **(rebuild only)** Pass `--no-cache` to `docker compose build` |
 
 > † Exactly one of `compose_file_path` or `compose_template_path` is required.
 

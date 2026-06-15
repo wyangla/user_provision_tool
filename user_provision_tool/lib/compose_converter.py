@@ -316,6 +316,10 @@ def make_header(src_to_key: dict[str, str], service_name_hint: str) -> str:
         "# Runtime variables resolved by docker compose via --env-file:",
         "#   ${ENV_VAR}  — leave these as-is; supply values in your .env file",
         "#",
+        "# If an env_file is provided at registration, any ``env_file: .env``",
+        "# directive in services is automatically replaced with a per-user file",
+        "# (``.env.{user}.{label}``) at render time.",
+        "#",
     ]
     return "\n".join(lines) + "\n"
 

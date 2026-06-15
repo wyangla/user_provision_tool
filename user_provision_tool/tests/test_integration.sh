@@ -1050,6 +1050,157 @@ curl -sf -X DELETE "$API_URL/users/svcuser/services/svcname_test/0" >/dev/null 2
 rm -rf "$COMPOSE_SVC_TEST_DIR"
 
 # ---------------------------------------------------------------------------
+# Test 25: env_file_path — per-user copy + env_file: .env replacement
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 25: env_file_path → per-user copy + compose env_file: .env rewrite ---"
+
+# 25a. Create a compose template that uses env_file: .env (string form)
+ENV_TEST_DIR="${PROVISION_DIR}/source_projects/envtest"
+mkdir -p "$ENV_TEST_DIR"
+cat > "${ENV_TEST_DIR}/docker-compose.yml.j2" <<'COMPOSE_EOF'
+services:
+  web:
+    image: nginx:alpine
+    container_name: {{ container_prefix }}web
+    env_file: .env
+    environment:
+      - APP_NAME={{ service_name }}
+    volumes:
+      - {{ volumes['html'] }}:/usr/share/nginx/html:ro
+    networks:
+      - {{ network_name }}
+  worker:
+    image: alpine:3.18
+    container_name: {{ container_prefix }}worker
+    command: tail -f /dev/null
+    env_file:
+      - .env
+    networks:
+      - {{ network_name }}
+
+volumes:
+  html:
+
+networks:
+  {{ network_name }}:
+    name: {{ network_name }}
+COMPOSE_EOF
+
+# 25b. Create a custom env file
+ENV_SRC_FILE="${PROVISION_DIR}/source_projects/envtest/custom.env"
+cat > "$ENV_SRC_FILE" <<'ENV_EOF'
+DB_HOST=postgres.local
+DB_PORT=5432
+REDIS_URL=redis://localhost:6379
+ENV_EOF
+
+mkdir -p "${PROVISION_DIR}/user-data/envuser/html"
+
+# 25c. Register with env_file_path
+ENV_REG_BODY=$(cat <<EOF
+{
+  "user_name": "envuser",
+  "service_name": "envtest",
+  "project_root": "envtest",
+  "compose_template_path": "docker-compose.yml.j2",
+  "env_file_path": "custom.env",
+  "label": "0",
+  "domain": "localhost",
+  "passwd": "",
+  "volumes": {
+    "html": "${PROVISION_DIR}/user-data/envuser/html"
+  }
+}
+EOF
+)
+env_resp=$(curl -sf -X POST "$API_URL/users?sync=true" \
+    -H "Content-Type: application/json" \
+    -d "$ENV_REG_BODY")
+env_status=$(echo "$env_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
+if [ "$env_status" = "registered" ]; then
+    pass "env_file_path registration: envuser/envtest/0 registered"
+else
+    fail "env_file_path registration failed: $env_resp"
+fi
+
+# 25d. Verify the env file was copied with per-user name .env.{user}.{label}
+PER_USER_ENV="${ENV_TEST_DIR}/.env.envuser.0"
+if [ -f "$PER_USER_ENV" ]; then
+    pass "Env file copied as .env.envuser.0 (per-user naming)"
+    if grep -q "DB_HOST=postgres.local" "$PER_USER_ENV" && \
+       grep -q "REDIS_URL=redis://localhost:6379" "$PER_USER_ENV"; then
+        pass "Copied env file contains original content"
+    else
+        fail "Copied env file has wrong content: $(cat "$PER_USER_ENV")"
+    fi
+else
+    fail "Per-user env file not found at: $PER_USER_ENV"
+fi
+
+# 25e. Verify env_file: .env (string form) was replaced in rendered compose
+ENV_COMPOSE="${ENV_TEST_DIR}/docker-compose.user-envuser.0.yml"
+if [ -f "$ENV_COMPOSE" ]; then
+    if grep -q "env_file: .env.envuser.0" "$ENV_COMPOSE"; then
+        pass "Rendered compose: env_file: .env replaced with .env.envuser.0 (string form)"
+    else
+        fail "Rendered compose missing replaced env_file (string form): $(grep env_file "$ENV_COMPOSE" || echo 'no env_file found')"
+    fi
+    # The original .env should NOT remain on a line by itself
+    if grep -qE '^\s*env_file:\s*\.env\s*$' "$ENV_COMPOSE"; then
+        fail "Rendered compose still has unreplaced 'env_file: .env' (string form)"
+    else
+        pass "Rendered compose: no unreplaced 'env_file: .env' remains"
+    fi
+    # List form should also be replaced
+    if grep -q "\- .env.envuser.0" "$ENV_COMPOSE"; then
+        pass "Rendered compose: env_file list - .env replaced with - .env.envuser.0"
+    else
+        fail "Rendered compose missing replaced env_file in list form: $(grep -A1 'env_file:' "$ENV_COMPOSE" || echo 'no env_file found')"
+    fi
+else
+    fail "Rendered compose file not found at: $ENV_COMPOSE"
+fi
+
+# 25f. Verify --env-file flag was passed to docker compose
+DOCKER_OPS_LOG="${PROVISION_DIR}/generated/docker_ops.log"
+if [ -f "$DOCKER_OPS_LOG" ]; then
+    if grep -q "\-\-env-file.*\.env\.envuser\.0" "$DOCKER_OPS_LOG"; then
+        pass "docker_ops.log: --env-file points to per-user env file"
+    else
+        fail "docker_ops.log missing --env-file with per-user name: $(grep 'env-file' "$DOCKER_OPS_LOG" || echo 'no --env-file found')"
+    fi
+else
+    fail "docker_ops.log not found at: $DOCKER_OPS_LOG"
+fi
+
+# 25g. Verify registry stores the per-user env_file_path (not the original)
+env_reg_entry=$(echo "$env_resp" | python3 -c "import sys,json; e=json.load(sys.stdin)['entry']; print(e.get('env_file_path',''))" 2>/dev/null || echo "")
+if echo "$env_reg_entry" | grep -q "\.env\.envuser\.0"; then
+    pass "Registry stores env_file_path as per-user copy (.env.envuser.0)"
+else
+    fail "Registry env_file_path should be per-user copy, got: $env_reg_entry"
+fi
+
+# 25h. Verify copied_env in response matches registry env_file_path
+env_copied=$(echo "$env_resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('copied_env',''))" 2>/dev/null || echo "")
+if [ -n "$env_copied" ] && echo "$env_copied" | grep -q "\.env\.envuser\.0"; then
+    pass "Response includes copied_env pointing to .env.envuser.0"
+    # copied_env should match the registry env_file_path (same per-user file)
+    if [ "$env_copied" = "$env_reg_entry" ]; then
+        pass "copied_env matches registry env_file_path (identical per-user path)"
+    else
+        fail "copied_env ($env_copied) != registry env_file_path ($env_reg_entry)"
+    fi
+else
+    fail "Response copied_env missing or wrong: $env_copied"
+fi
+
+# Clean up envuser
+curl -sf -X DELETE "$API_URL/users/envuser/services/envtest/0" >/dev/null 2>&1 || true
+rm -rf "$ENV_TEST_DIR"
+
+# ---------------------------------------------------------------------------
 # Results
 # ---------------------------------------------------------------------------
 echo ""

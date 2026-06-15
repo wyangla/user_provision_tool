@@ -140,7 +140,7 @@ source_project/service_1/          ← project root (-pr), resolved from bare na
 │                                                             │
 │  docker compose -f /pr/docker-compose.user-alice.0.yml      │
 │                 --project-name myapp-user_alice-0            │
-│                 --env-file /pr/.env                          │
+│                 --env-file /pr/.env.alice.0                  │
 │                 up -d                                        │
 │                                                             │
 │  --project-name = network_name; prevents Compose from using  │
@@ -148,7 +148,8 @@ source_project/service_1/          ← project root (-pr), resolved from bare na
 │  users to share a project and tear down each other's         │
 │  containers)                                                 │
 │  full path passed; compose resolves build: . from there     │
-│  --env-file is the copy placed next to the compose file     │
+│  --env-file points to per-user .env.{user}.{label} copy     │
+│  env_file: .env in services is rewritten to match           │
 │  ${ENV_VAR} resolved here from --env-file at runtime        │
 └─────────────────────────────────────────────────────────────┘
       │

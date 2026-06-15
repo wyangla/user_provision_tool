@@ -105,7 +105,7 @@ curl -X POST http://localhost:8765/users \
 curl -X POST "http://localhost:8765/users?sync=true" \
   -H 'Content-Type: application/json' \
   -d '{...}'
-# → {"status": "registered", "entry": {...}}
+# → {"status": "registered", "entry": {...}, "copied_env": ".../.env.alice.0"}
 ```
 
 **4. Poll task status or check all tasks**

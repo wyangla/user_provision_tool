@@ -3,7 +3,7 @@
 The test suite has four layers:
 
 ```
-Integration (bash)   tests/test_integration.sh     23 tests
+Integration (bash)   tests/test_integration.sh     25 tests
   └─ full Docker round-trip: build image → start API → register → rebuild → remove
     also covers -fc / -fn plain-file conversion via the API
     also covers passwd='' (no-auth) and default-passwd (auth enabled) paths
@@ -13,6 +13,7 @@ Integration (bash)   tests/test_integration.sh     23 tests
 E2E (pytest)         tests/test_e2e.py              ~36 tests
   └─ exercise CLI scripts end-to-end against real files, no Docker
     includes proxy --build-arg support tests
+    includes env_file_path with per-user copy + env_file: .env rewrite
 
 Proxy Support        tests/test_proxy_support.py    38 tests
   └─ docker_ops, provisioner, API models, CLI parsing, MockProxy lifecycle
@@ -20,9 +21,10 @@ Proxy Support        tests/test_proxy_support.py    38 tests
 Async Task Pool      tests/test_task_manager.py     10 tests
   └─ submit, complete, fail, cancel, list_all, uniqueness
 
-Unit (pytest)        tests/test_unit.py             ~90 tests
+Unit (pytest)        tests/test_unit.py             ~108 tests
   └─ individual lib/ functions in isolation, all I/O mocked
     includes provisioner proxy support tests
+    includes env_file render_compose rewrite + per-user copy tests
 ```
 
 ---
@@ -98,7 +100,7 @@ Covers: submit → complete, submit → fail, cancel pending, cancel completed, 
 **File:** `tests/test_integration.sh`  
 **Requires:** Docker, `curl`; `jq` optional (falls back to Python).
 
-Runs the full end-to-end cycle against a real Docker daemon (23 tests):
+Runs the full end-to-end cycle against a real Docker daemon (25 tests):
 
 ```
 Build provision-api image
@@ -127,6 +129,8 @@ Build provision-api image
             ├─ POST /users (async)                      → task_id, poll until complete
             ├─ GET  /tasks                              → task pool list with table
             ├─ POST /users (cancel)                     → DELETE /tasks/{id} cancelled
+            ├─ POST /users?sync=true (compose svc name) → proxy_pass detection
+            ├─ POST /users?sync=true with env_file_path → per-user .env copy + env_file: rewrite
             └─ GET  /tasks/{nonexistent}                → 404
 ```
 
@@ -145,11 +149,8 @@ bash tests/test_integration.sh
 # All pytest-based tests (181 tests, no Docker needed)
 uv run pytest tests/test_unit.py tests/test_e2e.py tests/test_proxy_support.py tests/test_task_manager.py -v
 
-# Full integration (23 tests, requires Docker)
+# Full integration (25 tests, requires Docker)
 sudo bash tests/test_integration.sh
-```
-```
-Results: 25 passed, 0 failed
 ```
 
 The test creates an isolated `PROVISION_DIR` in a temp directory and tears everything
@@ -167,7 +168,7 @@ uv sync
 python -m pytest tests/test_unit.py tests/test_e2e.py -v
 ```
 
-Expected: **132 passed** (94 unit + 38 e2e).
+Expected: **196 passed** (108 unit + 38 e2e + 38 proxy + 10 task_manager + 2).
 
 ---
 

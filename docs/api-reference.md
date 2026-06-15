@@ -59,7 +59,7 @@ Registers a user and starts their isolated service containers.
 | Mode | Method | Status | Response |
 |---|---|---|---|
 | Async (default) | `POST /users` | `202` | `{"task_id": "...", "status": "pending"}` |
-| Sync | `POST /users?sync=true` | `201` | `{"status": "registered", "entry": {...}}` |
+| Sync | `POST /users?sync=true` | `202` | `{"status": "registered", "entry": {...}, "copied_env": "..."}` |
 
 **Request body**
 
@@ -72,7 +72,7 @@ Registers a user and starts their isolated service containers.
 | `compose_template_path` | string | † | Filename (when `project_root` set) or absolute path inside the container to an existing `.j2` compose template |
 | `nginx_conf_file_path` | string | — | Filename (when `project_root` set) or absolute path inside the container to a **plain** nginx conf; auto-converted to a `.j2` template |
 | `nginx_conf_template_path` | string | — | Filename (when `project_root` set) or absolute path inside the container to an existing `.j2` nginx conf template |
-| `env_file_path` | string | — | Filename (when `project_root` set) or absolute path inside the container to a `.env` file for Docker Compose variable substitution |
+| `env_file_path` | string | — | Filename (when `project_root` set) or absolute path to a `.env` file. Copied as `.env.{user_name}.{label}` next to the generated compose file. Any `env_file: .env` directives in service definitions are automatically replaced with this per-user file name. |
 | `label` | string | — | Digits only; default `"0"` |
 | `domain` | string | — | Domain for nginx `server_name`; default `"localhost"` |
 | `passwd` | string | — | Plain-text password; default `"123456"`. Hashed with bcrypt before storage. Pass `""` to disable auth entirely (no `.htpasswd` written, `auth_basic` lines stripped from nginx conf) |
@@ -122,13 +122,15 @@ curl -X POST "http://localhost:8765/users?sync=true" \
     "user_name": "alice",
     "service_name": "myapp",
     "label": "0",
+    "network_name": "myapp-user_alice-0",
     "compose_file_path": "/srv/provision/source_projects/myapp/docker-compose.user-alice.0.yml",
     "nginx_conf_path": null,
     "htpasswd_path": null,
-    "env_file_path": "/srv/provision/source_projects/myapp/myapp.env",
+    "env_file_path": "/srv/provision/source_projects/myapp/.env.alice.0",
     "volumes": { "app_data": "/srv/provision/user-data/alice/app" }
   },
-  "volume_warnings": { "missing": [], "extra": [] }
+  "volume_warnings": { "missing": [], "extra": [] },
+  "copied_env": "/srv/provision/source_projects/myapp/.env.alice.0"
 }
 ```
 

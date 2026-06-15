@@ -260,6 +260,7 @@ def register_user(
             "status": "registered",
             "entry": result["entry"],
             "volume_warnings": result["volume_warnings"],
+            "copied_env": result.get("copied_env"),
         }
 
     # Async: submit task, return task_id immediately

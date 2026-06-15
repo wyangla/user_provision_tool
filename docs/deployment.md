@@ -197,6 +197,7 @@ PROVISION_DIR/
 │       ├── docker-compose.myapp.yml.j2    ← compose template (you provide, or auto-generated)
 │       ├── myapp.nginx.conf.j2            ← nginx template   (you provide, or auto-generated)
 │       ├── myapp.env                      ← runtime secrets   (you provide)
+│       ├── .env.alice.0                   ← per-user env copy (written by tool)
 │       └── docker-compose.user-alice.0.yml ← rendered per-user compose (written by tool)
 │
 ├── user_data/                    ← per-user volume directories (auto-created by tool)

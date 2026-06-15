@@ -123,8 +123,13 @@ def render_compose(
     """Render a docker-compose template and write the output file.
 
     If *env_file* is given, it is copied next to the generated compose file
-    so ``docker compose --env-file`` can reference it.  Returns the copied
-    path (a sibling of *output_path*), or None if no env_file was supplied.
+    with a per-user unique name (``.env.{user_name}.{label}``) so that
+    multiple users in the same project directory don't collide.  The copied
+    file path is returned so ``docker compose --env-file`` can reference it.
+
+    Additionally, any ``env_file: .env`` directives in service definitions
+    (both string and list forms) are replaced with the per-user env file name,
+    so containers load environment variables from the correct file.
 
     Two distinct placeholder types are handled by different engines:
       - ``{{ var }}``   — Jinja2; resolved here at render time.
@@ -143,16 +148,69 @@ def render_compose(
         "volumes": volumes,
     }
     rendered = env.get_template(tpl_name).render(**ctx)
-    with open(output_path, "w") as f:
-        f.write(rendered)
 
+    # --- Handle env_file: copy with per-user name + rewrite .env refs ---
     copied_env: str | None = None
     if env_file and Path(env_file).is_file():
-        dest = Path(output_path).parent / Path(env_file).name
+        # Per-user unique env file name to avoid collisions between users
+        # sharing the same project directory.
+        per_user_env_name = f".env.{user_name}.{label}"
+        dest = Path(output_path).parent / per_user_env_name
         if Path(env_file).resolve() != dest.resolve():
             shutil.copy2(env_file, dest)
         copied_env = str(dest)
+
+        # Replace env_file: .env references in the rendered compose so
+        # containers load env vars from the correct per-user file.
+        rendered = _rewrite_env_file_refs(rendered, per_user_env_name)
+
+    with open(output_path, "w") as f:
+        f.write(rendered)
+
     return copied_env
+
+
+def _rewrite_env_file_refs(yaml_text: str, per_user_env_name: str) -> str:
+    """Replace ``.env`` references in ``env_file:`` directives with *per_user_env_name*.
+
+    Handles both forms:
+      - String:  ``env_file: .env``
+      - List:    ``env_file:\\n  - .env``
+    """
+    lines = yaml_text.split("\n")
+    result: list[str] = []
+    in_env_file = False
+    env_file_indent = 0
+
+    for line in lines:
+        # Detect start of a list-form env_file: key (line ends with just "env_file:")
+        m = re.match(r"^(\s*)env_file:\s*$", line)
+        if m:
+            in_env_file = True
+            env_file_indent = len(m.group(1))
+            result.append(line)
+            continue
+
+        if in_env_file:
+            # List item under env_file:
+            m2 = re.match(r"^(\s+)-\s+(.*)$", line)
+            if m2 and len(m2.group(1)) > env_file_indent:
+                if m2.group(2) == ".env":
+                    line = f"{m2.group(1)}- {per_user_env_name}"
+                result.append(line)
+                continue
+            else:
+                in_env_file = False
+
+        # Handle string form: env_file: .env  (on a single line)
+        line = re.sub(
+            r"^(\s*env_file:\s+)\.env(\s*)$",
+            rf"\1{per_user_env_name}\2",
+            line,
+        )
+        result.append(line)
+
+    return "\n".join(result)
 
 
 def render_nginx_conf(

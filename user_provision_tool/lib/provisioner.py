@@ -170,6 +170,23 @@ def register_user(
         env_file=env_file,
     )
 
+    # Update registry with the per-user copied env path so rebuild/remove
+    # always reference the correct file (not the original source path).
+    if copied_env:
+        entry["env_file_path"] = copied_env
+        with _registry_lock:
+            # Re-save the full registry to persist the updated entry
+            users = registry._load()
+            for u in users:
+                if (
+                    u.get("user_name") == user_name
+                    and u.get("service_name") == service_name
+                    and str(u.get("label", "")) == str(label)
+                ):
+                    u["env_file_path"] = copied_env
+                    break
+            registry._save(users)
+
     # --- Render nginx conf + htpasswd ---
     if nginx_template and nginx_out:
         if htpasswd_out:
