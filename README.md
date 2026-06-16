@@ -274,7 +274,7 @@ flowchart LR
 # Install dependencies (requires uv)
 uv sync
 
-# Run unit + e2e + proxy + task manager tests (181 tests, no Docker needed)
+# Run unit + e2e + proxy + task manager tests (216 tests, no Docker needed)
 uv run pytest tests/test_unit.py tests/test_e2e.py tests/test_proxy_support.py tests/test_task_manager.py -v
 
 # Run full integration tests (requires Docker)

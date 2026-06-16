@@ -31,3 +31,5 @@ user_provision_tool/user_registry.yml
 _ref/
 .github/
 example/
+*/tests/fixtures/docker-compose.user-*
+

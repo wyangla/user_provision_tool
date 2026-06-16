@@ -20,8 +20,8 @@ Start a user's containers from a Jinja2 compose template.
 
 | Flag | Short | Required | Description |
 |---|---|---|---|
-| `--user-name` | `-u` | ✓ | User name (`[a-zA-Z0-9_]+`) |
-| `--service-name` | `-sn` | ✓ | Service name (`[a-zA-Z0-9_]+`) |
+| `--user-name` | `-u` | ✓ | User name (`[a-zA-Z0-9_-]+`) |
+| `--service-name` | `-sn` | ✓ | Service name (`[a-zA-Z0-9_-]+`) |
 | `--project-root` | `-pr` | ✓ | Project root directory; all filenames are resolved relative to this path. Accepts a **bare name** (`myapp`), a relative path, or an absolute path. A bare name (no `/`, does not exist as a dir) resolves to `$SOURCE_PROJECTS_DIR/myapp` — which is `$PROVISION_DIR/source_projects/myapp` by default; override via the `SOURCE_PROJECTS_DIR` env var. Returns an error if the resolved directory does not exist. |
 | `--compose-template` | `-tc` | ✓¹ | Filename of an existing `.j2` compose template inside project root |
 | `--compose-file` | `-fc` | ✓¹ | Filename of a plain `docker-compose.yml` inside project root; auto-converted to `.j2` |

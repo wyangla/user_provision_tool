@@ -3,13 +3,15 @@
 The test suite has four layers:
 
 ```
-Integration (bash)   tests/test_integration.sh     27 tests
+Integration (bash)   tests/test_integration.sh     29 tests
   └─ full Docker round-trip: build image → start API → register → rebuild → remove
     also covers -fc / -fn plain-file conversion via the API
     also covers passwd='' (no-auth) and default-passwd (auth enabled) paths
     also covers async task pool (GET /tasks, GET /tasks/{id}, DELETE /tasks/{id})
     also covers proxy build_args with MockProxy
     also covers HTTPS registration (full paths + bare filenames)
+    also covers hyphenated usernames
+    also covers auto-HTTPS generation from plain HTTP nginx conf
 
 E2E (pytest)         tests/test_e2e.py              ~36 tests
   └─ exercise CLI scripts end-to-end against real files, no Docker
@@ -104,7 +106,7 @@ Covers: submit → complete, submit → fail, cancel pending, cancel completed, 
 **File:** `tests/test_integration.sh`  
 **Requires:** Docker, `curl`; `jq` optional (falls back to Python).
 
-Runs the full end-to-end cycle against a real Docker daemon (25 tests):
+Runs the full end-to-end cycle against a real Docker daemon (29 tests):
 
 ```
 Build provision-api image
@@ -135,7 +137,9 @@ Build provision-api image
             ├─ POST /users (cancel)                     → DELETE /tasks/{id} cancelled
             ├─ POST /users?sync=true (compose svc name) → proxy_pass detection
             ├─ POST /users?sync=true with env_file_path → per-user .env copy + env_file: rewrite
-            └─ GET  /tasks/{nonexistent}                → 404
+            ├─ GET  /tasks/{nonexistent}                → 404
+            ├─ POST /users?sync=true (hyphenated user)  → hyphen allowed, container prefix correct
+            └─ POST /users?sync=true (plain conf + https)→ auto-HTTPS generation from HTTP conf
 ```
 
 Run:
@@ -153,7 +157,7 @@ bash tests/test_integration.sh
 # All pytest-based tests (181 tests, no Docker needed)
 uv run pytest tests/test_unit.py tests/test_e2e.py tests/test_proxy_support.py tests/test_task_manager.py -v
 
-# Full integration (25 tests, requires Docker)
+# Full integration (29 tests, requires Docker)
 sudo bash tests/test_integration.sh
 ```
 
@@ -172,7 +176,7 @@ uv sync
 python -m pytest tests/test_unit.py tests/test_e2e.py -v
 ```
 
-Expected: **196 passed** (108 unit + 38 e2e + 38 proxy + 10 task_manager + 2).
+Expected: **216 passed** (128 unit + 40 e2e + 38 proxy + 10 task_manager).
 
 ---
 

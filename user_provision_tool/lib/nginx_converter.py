@@ -117,43 +117,77 @@ def convert_nginx(
     if compose_service_names:
         compose_names = {n.lower() for n in compose_service_names}
 
-    # --- Wrap HTTPS server blocks in {% if https %}...{% endif %} ---
-    # Detect server blocks that contain "listen ... ssl" and wrap them.
+    # --- Wrap / auto-generate HTTPS server blocks ---
+    # Helper to split text into server blocks (preserving non-server content).
+    def _split_server_blocks(t: str):
+        blocks = re.split(r'(^[ \t]*server\s*\{)', t, flags=re.MULTILINE)
+        result: list[dict[str, Any]] = []
+        i = 0
+        while i < len(blocks):
+            chunk = blocks[i]
+            if re.match(r'^[ \t]*server\s*\{', chunk):
+                # Collect the full server block via brace counting
+                block = chunk
+                depth = chunk.count('{') - chunk.count('}')
+                i += 1
+                while i < len(blocks) and depth > 0:
+                    next_chunk = blocks[i]
+                    depth += next_chunk.count('{') - next_chunk.count('}')
+                    block += next_chunk
+                    i += 1
+                result.append({"is_server": True, "text": block})
+            else:
+                if chunk:
+                    result.append({"is_server": False, "text": chunk})
+                i += 1
+        return result
+
     _has_ssl_listen = bool(re.search(r'listen\s+[^;]*\bssl\b', text))
     if _has_ssl_listen:
-        # Find server blocks containing ssl listen directives and wrap them.
-        # Also wrap the corresponding HTTP→HTTPS redirect block (listen 80 + return 301 https).
-        def _wrap_ssl_blocks(t: str) -> str:
-            # Split on lines that are (or start with) "server {" at any indentation.
-            # The capturing group keeps the delimiter in the result.
-            blocks = re.split(r'(^[ \t]*server\s*\{)', t, flags=re.MULTILINE)
-            result: list[str] = []
-            i = 0
-            while i < len(blocks):
-                chunk = blocks[i]
-                if re.match(r'^[ \t]*server\s*\{', chunk):
-                    # Collect the full server block via brace counting
-                    block = chunk
-                    depth = chunk.count('{') - chunk.count('}')
-                    i += 1
-                    while i < len(blocks) and depth > 0:
-                        next_chunk = blocks[i]
-                        depth += next_chunk.count('{') - next_chunk.count('}')
-                        block += next_chunk
-                        i += 1
-                    # Check if this block contains listen ... ssl
-                    if re.search(r'listen\s+[^;]*\bssl\b', block):
-                        result.append('\n{% if https %}\n' + block + '\n{% endif %}\n')
-                    elif re.search(r'return\s+301\s+https://', block):
-                        # HTTP→HTTPS redirect block — also wrapped
-                        result.append('\n{% if https %}\n' + block + '\n{% endif %}\n')
-                    else:
-                        result.append(block)
+        # Existing HTTPS blocks: wrap them + redirect blocks in {% if https %}.
+        parts = _split_server_blocks(text)
+        out: list[str] = []
+        for p in parts:
+            if p["is_server"]:
+                block = p["text"]
+                if re.search(r'listen\s+[^;]*\bssl\b', block):
+                    out.append('\n{% if https %}\n' + block + '\n{% endif %}\n')
+                elif re.search(r'return\s+301\s+https://', block):
+                    out.append('\n{% if https %}\n' + block + '\n{% endif %}\n')
                 else:
-                    result.append(chunk)
-                    i += 1
-            return ''.join(result)
-        text = _wrap_ssl_blocks(text)
+                    out.append(block)
+            else:
+                out.append(p["text"])
+        text = ''.join(out)
+    else:
+        # No HTTPS blocks in source → auto-generate them from HTTP blocks.
+        parts = _split_server_blocks(text)
+        out: list[str] = []
+        for p in parts:
+            if p["is_server"]:
+                block = p["text"]
+                # Only auto-generate HTTPS for blocks with listen 80 (not other ports).
+                if re.search(r'listen\s+[^;]*\b80\b', block) and not re.search(r'listen\s+[^;]*\bssl\b', block):
+                    https_block = block
+                    # Replace listen 80 (with optional modifiers) → listen 443 ssl
+                    https_block = re.sub(
+                        r'listen\s+80(\s+[^;]*)?;',
+                        r'listen 443 ssl\1;',
+                        https_block,
+                    )
+                    # Inject ssl_certificate directives after the listen 443 ssl line
+                    https_block = re.sub(
+                        r'(listen\s+443\s+ssl[^;]*;)',
+                        r'\1\n    ssl_certificate {{ ssl_certificate_path }};\n    ssl_certificate_key {{ ssl_certificate_key_path }};',
+                        https_block,
+                    )
+                    out.append(block)
+                    out.append('\n{% if https %}\n' + https_block + '\n{% endif %}\n')
+                else:
+                    out.append(block)
+            else:
+                out.append(p["text"])
+        text = ''.join(out)
 
     # proxy_pass — rewrite host part when it references a service or matches hint
     if service_name_hint or compose_names:

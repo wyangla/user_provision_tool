@@ -1384,6 +1384,131 @@ fi
 curl -sf -X DELETE "$API_URL/users/barehttps/services/myapp/0" >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
+# Test 28: Hyphenated username (validation allows hyphens)
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 28: Hyphenated username ---"
+
+mkdir -p "${PROVISION_DIR}/user-data/test-user/app" "${PROVISION_DIR}/user-data/test-user/db"
+HYPHEN_BODY=$(cat <<EOF
+{
+  "user_name": "test-user",
+  "service_name": "myapp",
+  "compose_template_path": "${PROVISION_DIR}/templates/docker-compose.template.yml.j2",
+  "nginx_conf_template_path": null,
+  "label": "0",
+  "domain": "localhost",
+  "passwd": "s3cr3t",
+  "volumes": {
+    "app_data": "${PROVISION_DIR}/user-data/test-user/app",
+    "db_data":  "${PROVISION_DIR}/user-data/test-user/db"
+  }
+}
+EOF
+)
+hyphen_resp=$(curl -sf -X POST "$API_URL/users?sync=true" \
+    -H "Content-Type: application/json" \
+    -d "$HYPHEN_BODY")
+hyphen_status=$(echo "$hyphen_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
+if [ "$hyphen_status" = "registered" ]; then
+    pass "Hyphenated username 'test-user' registered successfully"
+else
+    fail "Hyphenated username registration failed: $hyphen_resp"
+fi
+
+# Verify the rendered compose file uses the hyphenated name in container names
+hyphen_compose=$(echo "$hyphen_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['entry'].get('compose_file_path',''))" 2>/dev/null || echo "")
+if [ -f "$hyphen_compose" ]; then
+    if grep -q "myapp-user_test-user-0-" "$hyphen_compose"; then
+        pass "Container prefix correctly uses hyphenated username"
+    else
+        fail "Container prefix missing hyphenated username in compose: $hyphen_compose"
+    fi
+else
+    fail "Compose file not found for hyphenated user: $hyphen_compose"
+fi
+
+# Clean up test-user
+curl -sf -X DELETE "$API_URL/users/test-user/services/myapp/0" >/dev/null 2>&1 || true
+
+# ---------------------------------------------------------------------------
+# Test 29: HTTPS auto-generation from plain HTTP nginx conf
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 29: HTTPS auto-generation from plain HTTP nginx conf ---"
+
+# Create fake cert files for this test
+AUTOHTTPS_CERT_SRC="${PROVISION_DIR}/templates/autohttps-fullchain.pem"
+AUTOHTTPS_KEY_SRC="${PROVISION_DIR}/templates/autohttps-privkey.pem"
+echo "AUTO HTTPS FULLCHAIN" > "$AUTOHTTPS_CERT_SRC"
+echo "AUTO HTTPS PRIVKEY"   > "$AUTOHTTPS_KEY_SRC"
+
+mkdir -p "${PROVISION_DIR}/user-data/autohttps/app" "${PROVISION_DIR}/user-data/autohttps/db"
+AUTOHTTPS_BODY=$(cat <<EOF
+{
+  "user_name": "autohttps",
+  "service_name": "myapp",
+  "compose_template_path": "${PROVISION_DIR}/templates/docker-compose.template.yml.j2",
+  "nginx_conf_file_path": "${PROVISION_DIR}/templates/myapp.plain.nginx.conf",
+  "label": "0",
+  "domain": "autohttps.example.com",
+  "passwd": "",
+  "volumes": {
+    "app_data": "${PROVISION_DIR}/user-data/autohttps/app",
+    "db_data":  "${PROVISION_DIR}/user-data/autohttps/db"
+  },
+  "https": true,
+  "fullchain": "${AUTOHTTPS_CERT_SRC}",
+  "privkey": "${AUTOHTTPS_KEY_SRC}"
+}
+EOF
+)
+autohttps_resp=$(curl -sf -X POST "$API_URL/users?sync=true" \
+    -H "Content-Type: application/json" \
+    -d "$AUTOHTTPS_BODY")
+autohttps_status=$(echo "$autohttps_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
+if [ "$autohttps_status" = "registered" ]; then
+    pass "HTTPS auto-gen from plain HTTP conf: registration succeeded"
+else
+    fail "HTTPS auto-gen registration failed: $autohttps_resp"
+fi
+
+# Verify the rendered nginx conf has auto-generated HTTPS blocks
+AUTOHTTPS_NGINX_CONF="${PROVISION_DIR}/generated/myapp.user-autohttps.0.nginx.conf"
+if [ -f "$AUTOHTTPS_NGINX_CONF" ]; then
+    # Auto-generated HTTPS block should have listen 443 ssl
+    if grep -q "listen 443 ssl;" "$AUTOHTTPS_NGINX_CONF"; then
+        pass "Auto-gen HTTPS: listen 443 ssl present"
+    else
+        fail "Auto-gen HTTPS: missing listen 443 ssl"
+    fi
+    # Auto-generated HTTPS block should have ssl_certificate directive
+    if grep -q "ssl_certificate\b" "$AUTOHTTPS_NGINX_CONF"; then
+        pass "Auto-gen HTTPS: ssl_certificate directive present"
+    else
+        fail "Auto-gen HTTPS: missing ssl_certificate"
+    fi
+    # Auto-generated HTTPS block should have ssl_certificate_key directive
+    if grep -q "ssl_certificate_key\b" "$AUTOHTTPS_NGINX_CONF"; then
+        pass "Auto-gen HTTPS: ssl_certificate_key directive present"
+    else
+        fail "Auto-gen HTTPS: missing ssl_certificate_key"
+    fi
+    # Original HTTP listen 80 block should still be present
+    if grep -q "listen 80;" "$AUTOHTTPS_NGINX_CONF"; then
+        pass "Auto-gen HTTPS: original listen 80 block preserved"
+    else
+        fail "Auto-gen HTTPS: original listen 80 block missing"
+    fi
+else
+    fail "Auto-gen HTTPS nginx conf not found at: $AUTOHTTPS_NGINX_CONF"
+fi
+
+# Clean up autohttps
+curl -sf -X DELETE "$API_URL/users/autohttps/services/myapp/0" >/dev/null 2>&1 || true
+rm -f "$AUTOHTTPS_CERT_SRC" "$AUTOHTTPS_KEY_SRC"
+
+# ---------------------------------------------------------------------------
 # Results
 # ---------------------------------------------------------------------------
 echo ""

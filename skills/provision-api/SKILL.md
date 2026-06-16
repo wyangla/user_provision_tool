@@ -170,8 +170,8 @@ curl -X DELETE http://localhost:8765/users/alice/services/myapp/0
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `user_name` | string | ✓ | `[a-zA-Z0-9_]+` |
-| `service_name` | string | ✓ | `[a-zA-Z0-9_]+` |
+| `user_name` | string | ✓ | `[a-zA-Z0-9_-]+` |
+| `service_name` | string | ✓ | `[a-zA-Z0-9_-]+` |
 | `project_root` | string | — | Bare name resolves to `$SOURCE_PROJECTS_DIR/{name}`. Relative/absolute path used as-is. 404 if not found. |
 | `compose_file_path` | string | † | Plain `docker-compose.yml` → auto-converted to `.j2` template |
 | `compose_template_path` | string | † | Pre-made `.j2` compose template filename |

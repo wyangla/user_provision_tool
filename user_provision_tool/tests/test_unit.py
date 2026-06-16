@@ -28,7 +28,12 @@ class TestValidation:
     def test_valid_name_all_chars(self):
         assert validation.validate_name("Service_Name123") == "Service_Name123"
 
-    @pytest.mark.parametrize("bad", ["alice!", "alice-1", "alice 1", "user@host", ""])
+    def test_valid_name_with_hyphen(self):
+        """Hyphens are now allowed in names."""
+        assert validation.validate_name("alice-1", "user_name") == "alice-1"
+        assert validation.validate_name("my-service_2") == "my-service_2"
+
+    @pytest.mark.parametrize("bad", ["alice!", "alice 1", "user@host", ""])
     def test_invalid_name(self, bad):
         with pytest.raises(validation.ValidationError):
             validation.validate_name(bad, "user_name")
@@ -1143,7 +1148,7 @@ class TestNginxConverter:
         assert "return 301 https://" in out
 
     def test_convert_http_only_conf_not_wrapped(self):
-        """A plain HTTP-only conf (no ssl listen) is NOT wrapped in {% if https %}."""
+        """A plain HTTP-only conf (no ssl listen) gets auto-generated HTTPS blocks."""
         from lib.nginx_converter import convert_nginx
         conf = (
             "server {\n"
@@ -1155,16 +1160,60 @@ class TestNginxConverter:
             "}\n"
         )
         out = convert_nginx(conf)
-        assert "{% if https %}" not in out
-        assert "{% endif %}" not in out
+        # Original HTTP block is preserved (the listen 80 block without wrap)
+        assert "listen 80;" in out
+        # Auto-generated HTTPS block is wrapped in {% if https %}
+        assert "{% if https %}" in out
+        assert "{% endif %}" in out
+        assert "listen 443 ssl;" in out
+
+    def test_convert_auto_generate_https_injects_ssl_certificate_vars(self):
+        """Auto-generated HTTPS block includes ssl_certificate template variables."""
+        from lib.nginx_converter import convert_nginx
+        conf = (
+            "server {\n"
+            "    listen 80;\n"
+            "    server_name example.com;\n"
+            "    location / {\n"
+            "        proxy_pass http://myapp-web:80;\n"
+            "    }\n"
+            "}\n"
+        )
+        out = convert_nginx(conf)
+        assert "ssl_certificate {{ ssl_certificate_path }};" in out
+        assert "ssl_certificate_key {{ ssl_certificate_key_path }};" in out
+
+    def test_convert_auto_generate_https_preserves_original_http_block(self):
+        """When HTTPS is auto-generated, the original HTTP block is kept intact."""
+        from lib.nginx_converter import convert_nginx
+        conf = (
+            "server {\n"
+            "    listen 80;\n"
+            "    server_name example.com;\n"
+            "    location / {\n"
+            "        proxy_pass http://myapp-web:80;\n"
+            "    }\n"
+            "}\n"
+        )
+        out = convert_nginx(conf)
+        # The original listen 80 block appears BEFORE any {% if https %} wrapper
+        idx_http = out.index("listen 80;")
+        idx_if = out.index("{% if https %}")
+        assert idx_http < idx_if, "Original HTTP block should appear before the auto-generated HTTPS block"
 
     def test_convert_ssl_paths_untouched_when_no_ssl(self):
-        """A conf without ssl_certificate directives keeps its original paths."""
+        """A conf without ssl_certificate directives now gets auto-generated HTTPS with template vars."""
         from lib.nginx_converter import convert_nginx
         conf = _SAMPLE_NGINX_CONF
         out = convert_nginx(conf)
-        # Original conf had no SSL — output should not contain ssl_certificate at all
-        assert "ssl_certificate" not in out
+        # Auto-generated HTTPS block now injects ssl_certificate template variables
+        assert "{{ ssl_certificate_path }}" in out
+        assert "{{ ssl_certificate_key_path }}" in out
+        # The original HTTP block is preserved (not wrapped)
+        assert "listen 80;" in out
+        # Auto-generated HTTPS block is conditionally wrapped
+        assert "{% if https %}" in out
+        assert "listen 443 ssl;" in out
 
 
 class TestProvisioner:
@@ -1232,6 +1281,9 @@ class TestProvisionerEnvFile:
         self.tmp_path = tmp_path
         self.user_data_dir = tmp_path / "user_data"
         self.user_data_dir.mkdir()
+        # Temp SSL dir so tests don't need write access to /provision/ssl
+        self.ssl_base_dir = tmp_path / "provision" / "ssl"
+        self.ssl_base_dir.mkdir(parents=True, exist_ok=True)
 
     # ── register_user ──────────────────────────────────────────
 
@@ -1369,6 +1421,7 @@ class TestProvisionerEnvFile:
             fullchain=str(fullchain_src),
             privkey=str(privkey_src),
             domain="example.com",
+            ssl_base_dir=str(self.ssl_base_dir),
         )
 
         entry = registry.get_user_service("httpsuser", "myapp", "0")
@@ -1377,8 +1430,10 @@ class TestProvisionerEnvFile:
 
         ssl_cert = entry.get("ssl_certificate_path", "")
         ssl_key = entry.get("ssl_certificate_key_path", "")
-        assert "/provision/ssl/example.com/fullchain.pem" in ssl_cert
-        assert "/provision/ssl/example.com/privkey.pem" in ssl_key
+        expected_cert = str(self.ssl_base_dir / "example.com" / "fullchain.pem")
+        expected_key = str(self.ssl_base_dir / "example.com" / "privkey.pem")
+        assert expected_cert in ssl_cert
+        assert expected_key in ssl_key
 
         # Cert files should exist at the destination
         assert Path(ssl_cert).exists()
@@ -1387,41 +1442,37 @@ class TestProvisionerEnvFile:
         assert Path(ssl_key).read_text() == "FAKE PRIVATE KEY\n"
 
     def test_register_https_bare_filenames_resolve_in_ssl_dir(self):
-        """Bare filenames (no path separator) are looked up in /provision/ssl/{domain}/."""
-        # Pre-create cert files in /provision/ssl/{domain}/
-        ssl_dir = Path("/provision/ssl/example.com")
+        """Bare filenames (no path separator) are looked up in ssl_base_dir/{domain}/."""
+        # Pre-create cert files in the temp ssl dir
+        ssl_dir = self.ssl_base_dir / "example.com"
         ssl_dir.mkdir(parents=True, exist_ok=True)
         (ssl_dir / "my-fullchain.pem").write_text("BARE FULLCHAIN\n")
         (ssl_dir / "my-privkey.pem").write_text("BARE PRIVKEY\n")
 
-        try:
-            provisioner.register_user(
-                user_name="barehttps",
-                service_name="myapp",
-                label="0",
-                compose_template=COMPOSE_TEMPLATE,
-                output_dir=self.tmp_path,
-                user_data_dir=self.user_data_dir,
-                https=True,
-                fullchain="my-fullchain.pem",
-                privkey="my-privkey.pem",
-                domain="example.com",
-            )
+        provisioner.register_user(
+            user_name="barehttps",
+            service_name="myapp",
+            label="0",
+            compose_template=COMPOSE_TEMPLATE,
+            output_dir=self.tmp_path,
+            user_data_dir=self.user_data_dir,
+            https=True,
+            fullchain="my-fullchain.pem",
+            privkey="my-privkey.pem",
+            domain="example.com",
+            ssl_base_dir=str(self.ssl_base_dir),
+        )
 
-            entry = registry.get_user_service("barehttps", "myapp", "0")
-            assert entry is not None
-            assert entry.get("https") is True
+        entry = registry.get_user_service("barehttps", "myapp", "0")
+        assert entry is not None
+        assert entry.get("https") is True
 
-            ssl_cert = entry.get("ssl_certificate_path", "")
-            ssl_key = entry.get("ssl_certificate_key_path", "")
-            assert ssl_cert.endswith("my-fullchain.pem")
-            assert ssl_key.endswith("my-privkey.pem")
-            assert Path(ssl_cert).read_text() == "BARE FULLCHAIN\n"
-            assert Path(ssl_key).read_text() == "BARE PRIVKEY\n"
-        finally:
-            # Cleanup: remove test certs
-            import shutil
-            shutil.rmtree(ssl_dir, ignore_errors=True)
+        ssl_cert = entry.get("ssl_certificate_path", "")
+        ssl_key = entry.get("ssl_certificate_key_path", "")
+        assert ssl_cert.endswith("my-fullchain.pem")
+        assert ssl_key.endswith("my-privkey.pem")
+        assert Path(ssl_cert).read_text() == "BARE FULLCHAIN\n"
+        assert Path(ssl_key).read_text() == "BARE PRIVKEY\n"
 
     def test_register_https_missing_fullchain_raises(self):
         """https=True with a missing fullchain file raises ValueError."""
@@ -1440,6 +1491,7 @@ class TestProvisionerEnvFile:
                 fullchain="/nonexistent/fullchain.pem",
                 privkey=str(privkey_src),
                 domain="example.com",
+                ssl_base_dir=str(self.ssl_base_dir),
             )
 
     def test_register_https_missing_privkey_raises(self):
@@ -1459,6 +1511,7 @@ class TestProvisionerEnvFile:
                 fullchain=str(fullchain_src),
                 privkey="/nonexistent/privkey.pem",
                 domain="example.com",
+                ssl_base_dir=str(self.ssl_base_dir),
             )
 
     def test_register_https_without_certs_raises(self):

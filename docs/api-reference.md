@@ -65,8 +65,8 @@ Registers a user and starts their isolated service containers.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `user_name` | string | ✓ | Alphanumeric + underscore |
-| `service_name` | string | ✓ | Alphanumeric + underscore |
+| `user_name` | string | ✓ | Alphanumeric + underscore + hyphen |
+| `service_name` | string | ✓ | Alphanumeric + underscore + hyphen |
 | `project_root` | string | — | Base directory for this service. Accepts a **bare name** (`"myapp"`), a relative path, or an absolute path. A bare name (no `/`, doesn't exist as a dir) resolves to `SOURCE_PROJECTS_DIR/myapp` — which is `$PROVISION_DIR/source_projects/myapp` by default. Equivalent to `-pr` in the CLI. Returns `404` if the resolved directory does not exist. |
 | `compose_file_path` | string | † | Filename (when `project_root` set) or absolute path inside the container to a **plain** `docker-compose.yml`; auto-converted to a `.j2` template on every registration |
 | `compose_template_path` | string | † | Filename (when `project_root` set) or absolute path inside the container to an existing `.j2` compose template |
