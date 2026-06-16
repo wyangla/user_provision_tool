@@ -7,6 +7,7 @@ duplicating it.
 
 from __future__ import annotations
 
+import shutil
 import threading
 from pathlib import Path
 from typing import Any
@@ -58,6 +59,10 @@ def register_user(
     nginx_output_dir: str | Path | None = None,
     user_data_dir: str | Path | None = None,
     build_args: dict[str, str] | None = None,
+    https: bool = False,
+    fullchain: str | None = None,
+    privkey: str | None = None,
+    ssl_base_dir: str = "/provision/ssl",
 ) -> dict[str, Any]:
     """Register a user and start their service containers.
 
@@ -68,8 +73,9 @@ def register_user(
     3. Add registry entry.
     4. Render compose file (optionally copies env_file).
     5. Render nginx conf + write htpasswd file.
-    6. ``docker compose build`` (if *build_args* provided) then ``docker compose up``.
-    7. Connect provision-nginx to the user's isolated network + reload.
+    6. (If *https*) copy SSL certs to ``/provision/ssl/{domain}/``.
+    7. ``docker compose build`` (if *build_args* provided) then ``docker compose up``.
+    8. Connect provision-nginx to the user's isolated network + reload.
 
     Parameters
     ----------
@@ -90,6 +96,17 @@ def register_user(
         Plain-text password.  Empty string → no htpasswd file written.
     nginx_container:
         Name of the provision-nginx Docker container.
+    https:
+        Enable HTTPS support.  When True, *fullchain* and *privkey* must be provided.
+    fullchain:
+        Path to the fullchain.pem certificate file.  Copied to
+        ``{ssl_base_dir}/{domain}/fullchain.pem`` (or used directly if a bare filename).
+    privkey:
+        Path to the privkey.pem private key file.  Copied to
+        ``{ssl_base_dir}/{domain}/privkey.pem`` (or used directly if a bare filename).
+    ssl_base_dir:
+        Base directory for SSL certificates.  Defaults to ``/provision/ssl``.
+        Override via ``PROVISION_SSL_DIR`` env var or pass explicitly.
 
     Returns
     -------
@@ -128,6 +145,55 @@ def register_user(
     # --- Hash password ---
     passwd_hash = auth.hash_password(user_name, passwd) if passwd else ""
 
+    # --- HTTPS: validate + copy certs ---
+    ssl_certificate_path = ""
+    ssl_certificate_key_path = ""
+    if https:
+        if not fullchain:
+            raise ValueError(
+                "https=True requires a valid --fullchain path to the certificate file."
+            )
+        if not privkey:
+            raise ValueError(
+                "https=True requires a valid --privkey path to the private key file."
+            )
+        ssl_dir = Path(ssl_base_dir) / domain
+        ssl_dir.mkdir(parents=True, exist_ok=True)
+
+        # --- Resolve fullchain ---
+        # Bare filename (no path separator) → look up directly in /provision/ssl/{domain}/
+        # Full / relative path → copy to /provision/ssl/{domain}/fullchain.pem (normalized name)
+        _fc = Path(fullchain)
+        if _fc.is_absolute() or "/" in str(fullchain):
+            if not _fc.is_file():
+                raise ValueError(
+                    f"https=True: fullchain file not found at {fullchain}"
+                )
+            ssl_certificate_path = str(ssl_dir / "fullchain.pem")
+            shutil.copy2(str(_fc), ssl_certificate_path)
+        else:
+            ssl_certificate_path = str(ssl_dir / fullchain)
+            if not Path(ssl_certificate_path).is_file():
+                raise ValueError(
+                    f"https=True: fullchain file not found at {ssl_certificate_path}"
+                )
+
+        # --- Resolve privkey (same logic) ---
+        _pk = Path(privkey)
+        if _pk.is_absolute() or "/" in str(privkey):
+            if not _pk.is_file():
+                raise ValueError(
+                    f"https=True: privkey file not found at {privkey}"
+                )
+            ssl_certificate_key_path = str(ssl_dir / "privkey.pem")
+            shutil.copy2(str(_pk), ssl_certificate_key_path)
+        else:
+            ssl_certificate_key_path = str(ssl_dir / privkey)
+            if not Path(ssl_certificate_key_path).is_file():
+                raise ValueError(
+                    f"https=True: privkey file not found at {ssl_certificate_key_path}"
+                )
+
     # --- Output paths ---
     compose_out = str(output_dir / f"docker-compose.user-{user_name}.{label}.yml")
     nginx_out: str | None = None
@@ -152,6 +218,9 @@ def register_user(
         "htpasswd_path": htpasswd_out,
         "volumes": volumes,
         "build_args": build_args or {},
+        "https": https,
+        "ssl_certificate_path": ssl_certificate_path,
+        "ssl_certificate_key_path": ssl_certificate_key_path,
     }
 
     # Duplicate check + add are atomic to prevent concurrent registrations
@@ -195,6 +264,9 @@ def register_user(
             nginx_template, nginx_out,
             user_name, service_name, label,
             domain, htpasswd_out or "",
+            https=https,
+            ssl_certificate_path=ssl_certificate_path,
+            ssl_certificate_key_path=ssl_certificate_key_path,
         )
 
     # --- Start containers ---

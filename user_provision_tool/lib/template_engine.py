@@ -221,8 +221,17 @@ def render_nginx_conf(
     label: str,
     domain_name: str,
     htpasswd_path: str,
+    https: bool = False,
+    ssl_certificate_path: str = "",
+    ssl_certificate_key_path: str = "",
 ) -> None:
-    """Render a nginx conf template and write the output file."""
+    """Render a nginx conf template and write the output file.
+
+    When *https* is True, the template can reference:
+      - ``{{ https }}``                  — boolean True
+      - ``{{ ssl_certificate_path }}``   — absolute path to fullchain.pem
+      - ``{{ ssl_certificate_key_path }}`` — absolute path to privkey.pem
+    """
     env, tpl_name = _make_env(template_path)
     prefix = container_prefix(service_name, user_name, label)
     ctx: dict[str, Any] = {
@@ -234,6 +243,9 @@ def render_nginx_conf(
         "network_name": user_network_name(service_name, user_name, label),
         "hostname": f"{service_name}-{user_name}-{label}.{domain_name}",
         "htpasswd_path": htpasswd_path,
+        "https": https,
+        "ssl_certificate_path": ssl_certificate_path,
+        "ssl_certificate_key_path": ssl_certificate_key_path,
     }
     rendered = env.get_template(tpl_name).render(**ctx)
     if not htpasswd_path:

@@ -60,6 +60,12 @@ SOURCE_PROJECTS_DIR = Path(
 )
 SOURCE_PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 
+# SSL certificates root: fullchain.pem and privkey.pem are copied here per domain.
+SSL_DIR = Path(
+    os.environ.get("SSL_DIR", str(GENERATED_DIR.parent / "ssl"))
+)
+SSL_DIR.mkdir(parents=True, exist_ok=True)
+
 NGINX_CONTAINER = os.environ.get("NGINX_CONTAINER", "provision-nginx")
 
 # The registry module reads REGISTRY_FILE from its own env var at import time.
@@ -95,6 +101,9 @@ class RegisterRequest(BaseModel):
     passwd: str = "123456"
     volumes: dict[str, str] = {}
     build_args: dict[str, str] | None = None
+    https: bool = False
+    fullchain: str | None = None
+    privkey: str | None = None
 
     @field_validator("user_name", "service_name")
     @classmethod
@@ -126,6 +135,11 @@ class RegisterRequest(BaseModel):
             raise ValueError("compose_template_path and compose_file_path are mutually exclusive")
         if self.nginx_conf_template_path and self.nginx_conf_file_path:
             raise ValueError("nginx_conf_template_path and nginx_conf_file_path are mutually exclusive")
+        if self.https:
+            if not self.fullchain:
+                raise ValueError("fullchain is required when https=True")
+            if not self.privkey:
+                raise ValueError("privkey is required when https=True")
         return self
 
 
@@ -246,6 +260,10 @@ def register_user(
         env_file=env_file_path,
         nginx_container=NGINX_CONTAINER,
         build_args=req.build_args,
+        https=req.https,
+        fullchain=req.fullchain,
+        privkey=req.privkey,
+        ssl_base_dir=str(SSL_DIR),
     )
 
     if sync:

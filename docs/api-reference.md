@@ -78,6 +78,9 @@ Registers a user and starts their isolated service containers.
 | `passwd` | string | — | Plain-text password; default `"123456"`. Hashed with bcrypt before storage. Pass `""` to disable auth entirely (no `.htpasswd` written, `auth_basic` lines stripped from nginx conf) |
 | `volumes` | object | — | `{ "template_vol_key": "/host/path", ... }` |
 | `build_args` | object | — | `{ "HTTP_PROXY": "http://proxy:8080", ... }` — passed as `--build-arg` to `docker compose build` (run before `compose up` when provided). Stored in registry for future rebuilds. |
+| `https` | bool | — | Enable HTTPS (default `false`). Requires `fullchain` and `privkey`. |
+| `fullchain` | string | — | Path or bare filename to the certificate file. Full path → copied to `$SSL_DIR/{domain}/fullchain.pem`. Bare filename → used directly from `$SSL_DIR/{domain}/`. |
+| `privkey` | string | — | Path or bare filename to the private key file. Same resolution rules as `fullchain`. |
 
 > † Exactly one of `compose_file_path` or `compose_template_path` must be provided.
 
@@ -147,6 +150,40 @@ curl -X POST "http://localhost:8765/users?sync=true" \
 |---|---|
 | `409` | The `user_name` + `service_name` + `label` combination is already registered |
 | `500` | `docker compose up` failed; error message includes stderr output |
+
+**Example — HTTPS registration**
+
+```bash
+# Full path — certs are copied to $SSL_DIR/example.com/
+curl -X POST "http://localhost:8765/users?sync=true" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user_name": "alice",
+    "service_name": "myapp",
+    "project_root": "myapp",
+    "compose_file_path": "docker-compose.yml",
+    "nginx_conf_file_path": "nginx.conf",
+    "domain": "example.com",
+    "https": true,
+    "fullchain": "/etc/letsencrypt/live/example.com/fullchain.pem",
+    "privkey": "/etc/letsencrypt/live/example.com/privkey.pem"
+  }'
+
+# Bare filename — certs already in $SSL_DIR/example.com/
+curl -X POST "http://localhost:8765/users?sync=true" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user_name": "alice",
+    "service_name": "myapp",
+    "project_root": "myapp",
+    "compose_file_path": "docker-compose.yml",
+    "nginx_conf_file_path": "nginx.conf",
+    "domain": "example.com",
+    "https": true,
+    "fullchain": "fullchain.pem",
+    "privkey": "privkey.pem"
+  }'
+```
 
 > In **async mode**, duplicate-registration and runtime errors appear in the task's `error` field
 > (poll `GET /tasks/{task_id}`) rather than as HTTP error responses.

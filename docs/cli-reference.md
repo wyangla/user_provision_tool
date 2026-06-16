@@ -31,6 +31,9 @@ Start a user's containers from a Jinja2 compose template.
 | `--env-file` | `-e` | — | Path to a `.env` file. Copied as `.env.{user_name}.{label}` next to the generated compose file. Any `env_file: .env` directives in the compose template are automatically replaced with this per-user file name at render time. |
 | `--label` | `-l` | — | Digits only; default `0` |
 | `--domain` | `-d` | — | Domain for nginx `server_name`; default `localhost` |
+| `--https` | — | — | Enable HTTPS (requires `--fullchain` and `--privkey`) |
+| `--fullchain` | — | — | Path or bare filename to the certificate file. **Full path** (e.g. `/etc/letsencrypt/live/example.com/fullchain.pem`): copied to `/provision/ssl/{domain}/fullchain.pem`. **Bare filename** (e.g. `fullchain.pem`): used directly from `/provision/ssl/{domain}/`. Required with `--https`. |
+| `--privkey` | — | — | Path or bare filename to the private key file. Same resolution rules as `--fullchain`. Required with `--https`. |
 | `--build-arg` | — | — | `KEY=VALUE` (repeatable). Passed as `--build-arg` to `docker compose build` which runs before `compose up` when provided. Stored in registry for future rebuilds. |
 
 ¹ `-tc` and `-fc` are mutually exclusive; exactly one is required. `-tn` and `-fn` are mutually exclusive and both optional.
@@ -104,6 +107,30 @@ python cli/register.py \
   -d example.com \
   --build-arg HTTP_PROXY=http://proxy:8080 \
   --build-arg HTTPS_PROXY=http://proxy:8080
+
+# With HTTPS (cert files are copied to /provision/ssl/example.com/)
+python cli/register.py \
+  -u alice \
+  -sn myapp \
+  -pr myapp \
+  -fc docker-compose.yml \
+  -tn myapp.nginx.conf.j2 \
+  -d example.com \
+  --https \
+  --fullchain /etc/letsencrypt/live/example.com/fullchain.pem \
+  --privkey /etc/letsencrypt/live/example.com/privkey.pem
+
+# With HTTPS using bare filenames (files already in /provision/ssl/example.com/)
+python cli/register.py \
+  -u alice \
+  -sn myapp \
+  -pr myapp \
+  -fc docker-compose.yml \
+  -tn myapp.nginx.conf.j2 \
+  -d example.com \
+  --https \
+  --fullchain fullchain.pem \
+  --privkey privkey.pem
 ```
 
 ---

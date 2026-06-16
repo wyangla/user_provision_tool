@@ -72,6 +72,40 @@ curl -X POST http://localhost:8765/users \
   }'
 ```
 
+### Register with HTTPS
+
+```bash
+# Full path — certs are copied to $SSL_DIR/example.com/
+curl -X POST http://localhost:8765/users \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user_name": "alice",
+    "service_name": "myapp",
+    "project_root": "myapp",
+    "compose_file_path": "docker-compose.yml",
+    "nginx_conf_file_path": "nginx.conf",
+    "domain": "example.com",
+    "https": true,
+    "fullchain": "/etc/letsencrypt/live/example.com/fullchain.pem",
+    "privkey": "/etc/letsencrypt/live/example.com/privkey.pem"
+  }'
+
+# Bare filename — certs already in $SSL_DIR/example.com/
+curl -X POST http://localhost:8765/users \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user_name": "alice",
+    "service_name": "myapp",
+    "project_root": "myapp",
+    "compose_file_path": "docker-compose.yml",
+    "nginx_conf_file_path": "nginx.conf",
+    "domain": "example.com",
+    "https": true,
+    "fullchain": "fullchain.pem",
+    "privkey": "privkey.pem"
+  }'
+```
+
 ### Poll task status
 
 ```bash
@@ -149,6 +183,9 @@ curl -X DELETE http://localhost:8765/users/alice/services/myapp/0
 | `passwd` | string | — | Default `"123456"`. Pass `""` to disable HTTP basic auth entirely. |
 | `volumes` | object | — | `{ "template_vol_key": "/host/path", ... }` |
 | `build_args` | object | — | `{ "HTTP_PROXY": "http://proxy:8080", ... }` — passed as `--build-arg` to `docker compose build`. Stored in registry. |
+| `https` | bool | — | Enable HTTPS (default `false`). Requires `fullchain` and `privkey`. |
+| `fullchain` | string | — | Path or bare filename to the certificate file. Full path → copied to `$SSL_DIR/{domain}/fullchain.pem`. Bare filename → used directly from `$SSL_DIR/{domain}/`. |
+| `privkey` | string | — | Path or bare filename to the private key file. Same resolution rules as `fullchain`. |
 | `no_cache` | bool | — | **(rebuild only)** Pass `--no-cache` to `docker compose build` |
 
 > † Exactly one of `compose_file_path` or `compose_template_path` is required.
@@ -184,7 +221,7 @@ export PROVISION_DIR=/srv/provision
 export PROVISION_API_PORT=8765
 
 # Create directory structure
-mkdir -p $PROVISION_DIR/generated $PROVISION_DIR/source_projects $PROVISION_DIR/user_data
+mkdir -p $PROVISION_DIR/{generated,ssl,source_projects,user_data}
 
 # Start
 docker compose -f docker-compose.provision.yml up -d --build
@@ -298,7 +335,7 @@ will prefix it with `{{ container_prefix }}`.
 
 ### Nginx conf template
 
-Copy this template and fill in the two placeholders for the specific service:
+Copy this template and fill in the placeholders for the specific service:
 
 ```nginx
 server {
@@ -320,6 +357,11 @@ server {
     }
 }
 ```
+
+For HTTPS support, wrap the server blocks in `{% if https %}...{% endif %}` conditionals
+and use `{{ ssl_certificate_path }}` / `{{ ssl_certificate_key_path }}` for the cert paths.
+The converter automatically replaces `ssl_certificate` and `ssl_certificate_key` paths with
+template variables and wraps `listen 443 ssl` server blocks in `{% if https %}` blocks.
 
 **Placeholders to fill in:**
 
@@ -395,6 +437,9 @@ When writing `.j2` templates manually, these Jinja2 variables are available:
 | `{{ domain_name }}` | `example.com` | compose + nginx |
 | `{{ hostname }}` | `myapp-alice-0.example.com` | nginx only |
 | `{{ htpasswd_path }}` | `/srv/provision/generated/myapp.user-alice.0.htpasswd` | nginx only |
+| `{{ https }}` | `True` / `False` | nginx only |
+| `{{ ssl_certificate_path }}` | `/srv/provision/ssl/example.com/fullchain.pem` | nginx only |
+| `{{ ssl_certificate_key_path }}` | `/srv/provision/ssl/example.com/privkey.pem` | nginx only |
 
 - `{{ var }}` placeholders are resolved at **registration time** by Jinja2.
 - `${ENV_VAR}` placeholders are resolved at **container startup** by `docker compose` via `--env-file`.

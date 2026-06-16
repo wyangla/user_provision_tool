@@ -48,6 +48,9 @@ All compose variables are available, plus:
 |---|---|---|
 | `{{ hostname }}` | `myapp-alice-0.example.com` | Derived as `{service}-{user}-{label}.{domain}` |
 | `{{ htpasswd_path }}` | `/srv/provision/generated/myapp.user-alice.0.htpasswd` | Absolute path to the generated `.htpasswd` file in `GENERATED_DIR` |
+| `{{ https }}` | `True` / `False` | Boolean; `True` when HTTPS is enabled |
+| `{{ ssl_certificate_path }}` | `/srv/provision/ssl/example.com/fullchain.pem` | Path to the fullchain certificate file |
+| `{{ ssl_certificate_key_path }}` | `/srv/provision/ssl/example.com/privkey.pem` | Path to the private key file |
 
 ---
 
@@ -83,6 +86,32 @@ services:
 
 ```nginx
 # myapp.nginx.conf.j2
+{% if https %}
+# --- HTTPS enabled ---
+server {
+    listen 80;
+    server_name {{ hostname }};
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name {{ hostname }};
+
+    ssl_certificate     {{ ssl_certificate_path }};
+    ssl_certificate_key {{ ssl_certificate_key_path }};
+
+    auth_basic "{{ service_name }} — {{ user_name }}";
+    auth_basic_user_file {{ htpasswd_path }};
+
+    location / {
+        proxy_pass       http://{{ container_prefix }}web:80;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+{% else %}
+# --- HTTP only ---
 server {
     listen 80;
     server_name {{ hostname }};
@@ -96,6 +125,7 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
     }
 }
+{% endif %}
 ```
 
 ---

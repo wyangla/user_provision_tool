@@ -31,11 +31,18 @@ _HEADER_TPL = """\
 #   {{{{ label }}}}
 #   {{{{ domain_name }}}}
 #   {{{{ network_name }}}}
+#   {{{{ https }}}}             boolean, True when HTTPS is enabled
+#   {{{{ ssl_certificate_path }}}}      /provision/ssl/{{{{ domain_name }}}}/fullchain.pem
+#   {{{{ ssl_certificate_key_path }}}}  /provision/ssl/{{{{ domain_name }}}}/privkey.pem
 #
 # NOTE: proxy_pass targets have been rewritten where possible:
 #   • Hosts matching a compose service name → {{{{ container_prefix }}}}<name>
 #   • Hosts starting with the service name hint → {{{{ container_prefix }}}}<suffix>
 #   Review and adjust any remaining literal container names manually.
+#
+# NOTE: ssl_certificate and ssl_certificate_key paths have been replaced with
+#   template variables.  Wrap HTTPS server blocks in {{% if https %}}...{{% endif %}}
+#   to conditionally enable TLS.
 #
 """
 
@@ -80,6 +87,20 @@ def convert_nginx(
         text,
     )
 
+    # ssl_certificate path → {{ ssl_certificate_path }}
+    text = re.sub(
+        r'([ \t]*ssl_certificate[ \t]+)\S+(;)',
+        r'\1{{ ssl_certificate_path }}\2',
+        text,
+    )
+
+    # ssl_certificate_key path → {{ ssl_certificate_key_path }}
+    text = re.sub(
+        r'([ \t]*ssl_certificate_key[ \t]+)\S+(;)',
+        r'\1{{ ssl_certificate_key_path }}\2',
+        text,
+    )
+
     # If no auth_basic block exists at all, inject one before the first proxy_pass
     if not re.search(r'[ \t]*auth_basic\b', text):
         def _inject_auth(m: re.Match) -> str:
@@ -95,6 +116,44 @@ def convert_nginx(
     compose_names: set[str] = set()
     if compose_service_names:
         compose_names = {n.lower() for n in compose_service_names}
+
+    # --- Wrap HTTPS server blocks in {% if https %}...{% endif %} ---
+    # Detect server blocks that contain "listen ... ssl" and wrap them.
+    _has_ssl_listen = bool(re.search(r'listen\s+[^;]*\bssl\b', text))
+    if _has_ssl_listen:
+        # Find server blocks containing ssl listen directives and wrap them.
+        # Also wrap the corresponding HTTP→HTTPS redirect block (listen 80 + return 301 https).
+        def _wrap_ssl_blocks(t: str) -> str:
+            # Split on lines that are (or start with) "server {" at any indentation.
+            # The capturing group keeps the delimiter in the result.
+            blocks = re.split(r'(^[ \t]*server\s*\{)', t, flags=re.MULTILINE)
+            result: list[str] = []
+            i = 0
+            while i < len(blocks):
+                chunk = blocks[i]
+                if re.match(r'^[ \t]*server\s*\{', chunk):
+                    # Collect the full server block via brace counting
+                    block = chunk
+                    depth = chunk.count('{') - chunk.count('}')
+                    i += 1
+                    while i < len(blocks) and depth > 0:
+                        next_chunk = blocks[i]
+                        depth += next_chunk.count('{') - next_chunk.count('}')
+                        block += next_chunk
+                        i += 1
+                    # Check if this block contains listen ... ssl
+                    if re.search(r'listen\s+[^;]*\bssl\b', block):
+                        result.append('\n{% if https %}\n' + block + '\n{% endif %}\n')
+                    elif re.search(r'return\s+301\s+https://', block):
+                        # HTTP→HTTPS redirect block — also wrapped
+                        result.append('\n{% if https %}\n' + block + '\n{% endif %}\n')
+                    else:
+                        result.append(block)
+                else:
+                    result.append(chunk)
+                    i += 1
+            return ''.join(result)
+        text = _wrap_ssl_blocks(text)
 
     # proxy_pass — rewrite host part when it references a service or matches hint
     if service_name_hint or compose_names:

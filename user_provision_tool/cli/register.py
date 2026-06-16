@@ -96,6 +96,9 @@ def parse_args() -> argparse.Namespace:
 
     p.add_argument("-l", "--label", default="0", help="Label (digits only, default: 0)")
     p.add_argument("-d", "--domain", default="localhost", help="Domain name for nginx hostname")
+    p.add_argument("--https", action="store_true", default=False, help="Enable HTTPS support (requires --fullchain and --privkey)")
+    p.add_argument("--fullchain", default=None, help="Path to fullchain.pem certificate file (required when --https is set)")
+    p.add_argument("--privkey", default=None, help="Path to privkey.pem private key file (required when --https is set)")
     p.add_argument("--build-arg", action="append", default=[], dest="build_args_raw",
         metavar="KEY=VALUE", help="Build argument passed to docker compose build (can be repeated, e.g. --build-arg HTTP_PROXY=http://proxy:8080)")
     return p.parse_args()
@@ -254,6 +257,23 @@ def main() -> None:
     # --- Parse build args ---
     build_args = _parse_build_args(args.build_args_raw)
 
+    # --- HTTPS validation ---
+    # Full paths are checked immediately; bare filenames are resolved by the provisioner
+    # against /provision/ssl/{domain}/.
+    if args.https:
+        if not args.fullchain:
+            print("ERROR: --https requires --fullchain.", file=sys.stderr)
+            sys.exit(1)
+        if not args.privkey:
+            print("ERROR: --https requires --privkey.", file=sys.stderr)
+            sys.exit(1)
+        # Quick check for full paths (bare filenames are deferred to provisioner)
+        for label, val in [("fullchain", args.fullchain), ("privkey", args.privkey)]:
+            p = Path(val)
+            if (p.is_absolute() or "/" in val) and not p.is_file():
+                print(f"ERROR: --{label} file not found: {val}", file=sys.stderr)
+                sys.exit(1)
+
     # --- Core registration workflow ---
     try:
         result = provisioner.register_user(
@@ -270,6 +290,10 @@ def main() -> None:
             domain=args.domain,
             env_file=env_file,
             build_args=build_args,
+            https=args.https,
+            fullchain=args.fullchain,
+            privkey=args.privkey,
+            ssl_base_dir=os.environ.get("PROVISION_SSL_DIR", str(GENERATED_DIR.parent / "ssl")),
         )
     except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)
@@ -289,6 +313,9 @@ def main() -> None:
         else:
             print("[3/4] No password set; skipping htpasswd file.")
         print(f"[3/4] Generated nginx conf: {entry['nginx_conf_path']}")
+        if args.https:
+            print(f"[3/4] HTTPS enabled — cert: {entry.get('ssl_certificate_path', '')}")
+            print(f"[3/4] HTTPS enabled — key:  {entry.get('ssl_certificate_key_path', '')}")
     else:
         print("[3/4] No nginx template provided; skipping.")
     print(f"\nDone. User '{args.user_name}' registered and containers started.")

@@ -15,8 +15,9 @@ a source project directory. When a user registers, the tool:
 1. **Auto-converts** your plain files into per-user Jinja2 templates (once, on first use)
 2. **Renders** isolated `docker-compose.user-{user}.{label}.yml` and `*.nginx.conf` for that user
 3. **Starts** the containers with `docker compose up --project-name {isolated-name}`
-4. **Routes** HTTP traffic by connecting `provision-nginx` to the user's Docker network and reloading nginx live
-5. **Tracks** state in `user_registry.yml` — remove a user's service and its containers are torn down cleanly
+4. **Routes** HTTP/HTTPS traffic by connecting `provision-nginx` to the user's Docker network and reloading nginx live
+5. **Supports TLS** — pass `--https` with certificate paths and the tool copies certs, renders HTTPS server blocks, and enables SSL termination
+6. **Tracks** state in `user_registry.yml` — remove a user's service and its containers are torn down cleanly
 
 Per-user container names: `{service}-user_{user}-{label}-{svc}`
 Per-user hostnames: `{service}-{user}-{label}.{domain}`
@@ -72,7 +73,7 @@ A **provisioner**: given a Docker Compose stack, it stamps out one isolated, rou
 **1. Set up the provision directory and drop in your service**
 ```bash
 export PROVISION_DIR=/srv/provision
-mkdir -p $PROVISION_DIR/generated $PROVISION_DIR/source_projects/myapp
+mkdir -p $PROVISION_DIR/{generated,ssl,source_projects/myapp}
 # copy your service into source_projects/myapp/  (Dockerfile, docker-compose.yml, nginx.conf, .env, ...)
 ```
 
@@ -137,6 +138,39 @@ curl -X POST "http://localhost:8765/users/alice/services/myapp/0/rebuild?sync=tr
 curl -X DELETE "http://localhost:8765/users/alice/services/myapp/0?sync=true"
 ```
 
+**8. Register with HTTPS**
+```bash
+# Full path — certs are copied to $PROVISION_DIR/ssl/example.com/
+curl -X POST "http://localhost:8765/users?sync=true" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user_name": "alice",
+    "service_name": "myapp",
+    "project_root": "myapp",
+    "compose_file_path": "docker-compose.yml",
+    "nginx_conf_file_path": "nginx.conf",
+    "domain": "example.com",
+    "https": true,
+    "fullchain": "/etc/letsencrypt/live/example.com/fullchain.pem",
+    "privkey": "/etc/letsencrypt/live/example.com/privkey.pem"
+  }'
+
+# Bare filename — certs already in $PROVISION_DIR/ssl/example.com/
+curl -X POST "http://localhost:8765/users?sync=true" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user_name": "alice",
+    "service_name": "myapp",
+    "project_root": "myapp",
+    "compose_file_path": "docker-compose.yml",
+    "nginx_conf_file_path": "nginx.conf",
+    "domain": "example.com",
+    "https": true,
+    "fullchain": "fullchain.pem",
+    "privkey": "privkey.pem"
+  }'
+```
+
 ---
 
 ## Quick Start (CLI)
@@ -167,6 +201,17 @@ python cli/rebuild.py -u alice -sn myapp -l 0
 
 # Remove
 python cli/remove.py -u alice -sn myapp -l 0
+
+# With HTTPS
+python cli/register.py \
+  -u alice -sn myapp \
+  -pr myapp \
+  -fc docker-compose.yml \
+  -fn nginx.conf \
+  -d example.com \
+  --https \
+  --fullchain /etc/letsencrypt/live/example.com/fullchain.pem \
+  --privkey /etc/letsencrypt/live/example.com/privkey.pem
 ```
 
 ---

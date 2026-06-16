@@ -12,7 +12,7 @@ flowchart LR
         subgraph upt["User Provision Tool"]
             direction TB
             provision_api["provision-api\nFastAPI · :8765"]
-            provision_nginx["provision-nginx\nnginx · :80"]
+            provision_nginx["provision-nginx\nnginx · :80 & :443"]
         end
 
         docker_daemon["Docker Daemon"]

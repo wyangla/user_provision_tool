@@ -236,6 +236,60 @@ class TestTemplateEngine:
         content = Path(out).read_text()
         assert "server_name svc-testuser-3.test.local;" in content
 
+    # --- HTTPS rendering ---
+
+    def test_render_nginx_conf_https_enabled(self, tmp_path):
+        """When https=True, the template renders HTTPS server blocks."""
+        out = str(tmp_path / "myapp.user-alice.0.nginx.conf")
+        htpasswd = str(tmp_path / "myapp.user-alice.0.htpasswd")
+        template_engine.render_nginx_conf(
+            NGINX_TEMPLATE, out,
+            user_name="alice", service_name="myapp", label="0",
+            domain_name="example.com", htpasswd_path=htpasswd,
+            https=True,
+            ssl_certificate_path="/provision/ssl/example.com/fullchain.pem",
+            ssl_certificate_key_path="/provision/ssl/example.com/privkey.pem",
+        )
+        content = Path(out).read_text()
+        assert "listen 443 ssl;" in content
+        assert "ssl_certificate     /provision/ssl/example.com/fullchain.pem;" in content
+        assert "ssl_certificate_key /provision/ssl/example.com/privkey.pem;" in content
+        assert "return 301 https://$host$request_uri;" in content
+        assert "server_name myapp-alice-0.example.com;" in content
+
+    def test_render_nginx_conf_https_disabled_no_ssl_blocks(self, tmp_path):
+        """When https=False (default), no SSL blocks appear in output."""
+        out = str(tmp_path / "myapp.user-alice.0.nginx.conf")
+        htpasswd = str(tmp_path / "myapp.user-alice.0.htpasswd")
+        template_engine.render_nginx_conf(
+            NGINX_TEMPLATE, out,
+            user_name="alice", service_name="myapp", label="0",
+            domain_name="example.com", htpasswd_path=htpasswd,
+        )
+        content = Path(out).read_text()
+        assert "listen 443 ssl;" not in content
+        assert "ssl_certificate" not in content
+        assert "ssl_certificate_key" not in content
+        assert "return 301 https://" not in content
+        assert "listen 80;" in content
+        assert "server_name myapp-alice-0.example.com;" in content
+
+    def test_render_nginx_conf_https_empty_ssl_paths_allowed(self, tmp_path):
+        """When https=False, empty ssl paths are provided but templated away."""
+        out = str(tmp_path / "myapp.user-alice.0.nginx.conf")
+        template_engine.render_nginx_conf(
+            NGINX_TEMPLATE, out,
+            user_name="alice", service_name="myapp", label="0",
+            domain_name="example.com", htpasswd_path="",
+            https=False,
+            ssl_certificate_path="",
+            ssl_certificate_key_path="",
+        )
+        content = Path(out).read_text()
+        # SSL blocks should NOT render when https=False
+        assert "listen 443 ssl;" not in content
+        assert "listen 80;" in content
+
     def test_render_compose_two_users_independent(self, tmp_path):
         out_alice = str(tmp_path / "alice.yml")
         out_bob = str(tmp_path / "bob.yml")
@@ -1026,10 +1080,91 @@ class TestNginxConverter:
         # It should NOT strip "myapp" prefix (which wouldn't match anyway)
         assert "myapp" not in out.split("proxy_pass")[1]
 
+    # --- SSL certificate path conversion ---
 
-# ---------------------------------------------------------------------------
-# provisioner
-# ---------------------------------------------------------------------------
+    def test_convert_ssl_certificate_path_replaced(self):
+        """ssl_certificate path is replaced with {{ ssl_certificate_path }}."""
+        from lib.nginx_converter import convert_nginx
+        conf = (
+            "server {\n"
+            "    listen 443 ssl;\n"
+            "    server_name example.com;\n"
+            "    ssl_certificate     /etc/letsencrypt/live/example.com/fullchain.pem;\n"
+            "    ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;\n"
+            "    location / {\n"
+            "        proxy_pass http://myapp-web:80;\n"
+            "    }\n"
+            "}\n"
+        )
+        out = convert_nginx(conf)
+        assert "ssl_certificate     {{ ssl_certificate_path }};" in out
+        assert "ssl_certificate_key {{ ssl_certificate_key_path }};" in out
+        assert "/etc/letsencrypt" not in out
+
+    def test_convert_ssl_block_wrapped_in_if_https(self):
+        """Server blocks containing listen ... ssl are wrapped in {% if https %}...{% endif %}."""
+        from lib.nginx_converter import convert_nginx
+        conf = (
+            "server {\n"
+            "    listen 443 ssl;\n"
+            "    server_name example.com;\n"
+            "    ssl_certificate     /etc/ssl/fullchain.pem;\n"
+            "    ssl_certificate_key /etc/ssl/privkey.pem;\n"
+            "    location / {\n"
+            "        proxy_pass http://myapp-web:80;\n"
+            "    }\n"
+            "}\n"
+        )
+        out = convert_nginx(conf)
+        assert "{% if https %}" in out
+        assert "{% endif %}" in out
+
+    def test_convert_https_redirect_block_wrapped(self):
+        """HTTP→HTTPS redirect blocks (return 301 https://) are wrapped too."""
+        from lib.nginx_converter import convert_nginx
+        conf = (
+            "server {\n"
+            "    listen 80;\n"
+            "    server_name example.com;\n"
+            "    return 301 https://$host$request_uri;\n"
+            "}\n"
+            "server {\n"
+            "    listen 443 ssl;\n"
+            "    server_name example.com;\n"
+            "    location / {\n"
+            "        proxy_pass http://myapp-web:80;\n"
+            "    }\n"
+            "}\n"
+        )
+        out = convert_nginx(conf)
+        # Both the redirect and the SSL block should be wrapped
+        assert out.count("{% if https %}") == 2
+        assert out.count("{% endif %}") == 2
+        assert "return 301 https://" in out
+
+    def test_convert_http_only_conf_not_wrapped(self):
+        """A plain HTTP-only conf (no ssl listen) is NOT wrapped in {% if https %}."""
+        from lib.nginx_converter import convert_nginx
+        conf = (
+            "server {\n"
+            "    listen 80;\n"
+            "    server_name example.com;\n"
+            "    location / {\n"
+            "        proxy_pass http://myapp-web:80;\n"
+            "    }\n"
+            "}\n"
+        )
+        out = convert_nginx(conf)
+        assert "{% if https %}" not in out
+        assert "{% endif %}" not in out
+
+    def test_convert_ssl_paths_untouched_when_no_ssl(self):
+        """A conf without ssl_certificate directives keeps its original paths."""
+        from lib.nginx_converter import convert_nginx
+        conf = _SAMPLE_NGINX_CONF
+        out = convert_nginx(conf)
+        # Original conf had no SSL — output should not contain ssl_certificate at all
+        assert "ssl_certificate" not in out
 
 
 class TestProvisioner:
@@ -1212,6 +1347,153 @@ class TestProvisionerEnvFile:
                     assert "prod.env" not in env_path, (
                         f"Rebuild --env-file should NOT use original, got: {env_path}"
                     )
+
+    # ── HTTPS (TLS) support ────────────────────────────────────
+
+    def test_register_https_copies_certs_and_stores_in_registry(self):
+        """When https=True, cert files are copied to /provision/ssl/{domain}/ and registry updated."""
+        # Create fake cert files
+        fullchain_src = self.tmp_path / "fullchain.pem"
+        fullchain_src.write_text("FAKE FULLCHAIN CERT\n")
+        privkey_src = self.tmp_path / "privkey.pem"
+        privkey_src.write_text("FAKE PRIVATE KEY\n")
+
+        provisioner.register_user(
+            user_name="httpsuser",
+            service_name="myapp",
+            label="0",
+            compose_template=COMPOSE_TEMPLATE,
+            output_dir=self.tmp_path,
+            user_data_dir=self.user_data_dir,
+            https=True,
+            fullchain=str(fullchain_src),
+            privkey=str(privkey_src),
+            domain="example.com",
+        )
+
+        entry = registry.get_user_service("httpsuser", "myapp", "0")
+        assert entry is not None
+        assert entry.get("https") is True
+
+        ssl_cert = entry.get("ssl_certificate_path", "")
+        ssl_key = entry.get("ssl_certificate_key_path", "")
+        assert "/provision/ssl/example.com/fullchain.pem" in ssl_cert
+        assert "/provision/ssl/example.com/privkey.pem" in ssl_key
+
+        # Cert files should exist at the destination
+        assert Path(ssl_cert).exists()
+        assert Path(ssl_cert).read_text() == "FAKE FULLCHAIN CERT\n"
+        assert Path(ssl_key).exists()
+        assert Path(ssl_key).read_text() == "FAKE PRIVATE KEY\n"
+
+    def test_register_https_bare_filenames_resolve_in_ssl_dir(self):
+        """Bare filenames (no path separator) are looked up in /provision/ssl/{domain}/."""
+        # Pre-create cert files in /provision/ssl/{domain}/
+        ssl_dir = Path("/provision/ssl/example.com")
+        ssl_dir.mkdir(parents=True, exist_ok=True)
+        (ssl_dir / "my-fullchain.pem").write_text("BARE FULLCHAIN\n")
+        (ssl_dir / "my-privkey.pem").write_text("BARE PRIVKEY\n")
+
+        try:
+            provisioner.register_user(
+                user_name="barehttps",
+                service_name="myapp",
+                label="0",
+                compose_template=COMPOSE_TEMPLATE,
+                output_dir=self.tmp_path,
+                user_data_dir=self.user_data_dir,
+                https=True,
+                fullchain="my-fullchain.pem",
+                privkey="my-privkey.pem",
+                domain="example.com",
+            )
+
+            entry = registry.get_user_service("barehttps", "myapp", "0")
+            assert entry is not None
+            assert entry.get("https") is True
+
+            ssl_cert = entry.get("ssl_certificate_path", "")
+            ssl_key = entry.get("ssl_certificate_key_path", "")
+            assert ssl_cert.endswith("my-fullchain.pem")
+            assert ssl_key.endswith("my-privkey.pem")
+            assert Path(ssl_cert).read_text() == "BARE FULLCHAIN\n"
+            assert Path(ssl_key).read_text() == "BARE PRIVKEY\n"
+        finally:
+            # Cleanup: remove test certs
+            import shutil
+            shutil.rmtree(ssl_dir, ignore_errors=True)
+
+    def test_register_https_missing_fullchain_raises(self):
+        """https=True with a missing fullchain file raises ValueError."""
+        privkey_src = self.tmp_path / "privkey.pem"
+        privkey_src.write_text("KEY\n")
+
+        with pytest.raises(ValueError, match="fullchain"):
+            provisioner.register_user(
+                user_name="badhttps",
+                service_name="myapp",
+                label="0",
+                compose_template=COMPOSE_TEMPLATE,
+                output_dir=self.tmp_path,
+                user_data_dir=self.user_data_dir,
+                https=True,
+                fullchain="/nonexistent/fullchain.pem",
+                privkey=str(privkey_src),
+                domain="example.com",
+            )
+
+    def test_register_https_missing_privkey_raises(self):
+        """https=True with a missing privkey file raises ValueError."""
+        fullchain_src = self.tmp_path / "fullchain.pem"
+        fullchain_src.write_text("CERT\n")
+
+        with pytest.raises(ValueError, match="privkey"):
+            provisioner.register_user(
+                user_name="badhttps2",
+                service_name="myapp",
+                label="0",
+                compose_template=COMPOSE_TEMPLATE,
+                output_dir=self.tmp_path,
+                user_data_dir=self.user_data_dir,
+                https=True,
+                fullchain=str(fullchain_src),
+                privkey="/nonexistent/privkey.pem",
+                domain="example.com",
+            )
+
+    def test_register_https_without_certs_raises(self):
+        """https=True with None fullchain/privkey raises ValueError."""
+        with pytest.raises(ValueError, match="fullchain"):
+            provisioner.register_user(
+                user_name="nocert",
+                service_name="myapp",
+                label="0",
+                compose_template=COMPOSE_TEMPLATE,
+                output_dir=self.tmp_path,
+                user_data_dir=self.user_data_dir,
+                https=True,
+                fullchain=None,
+                privkey=None,
+                domain="example.com",
+            )
+
+    def test_register_https_false_does_not_touch_certs(self):
+        """When https=False, no cert files are copied and registry has empty ssl fields."""
+        provisioner.register_user(
+            user_name="nohttps",
+            service_name="myapp",
+            label="0",
+            compose_template=COMPOSE_TEMPLATE,
+            output_dir=self.tmp_path,
+            user_data_dir=self.user_data_dir,
+            https=False,
+        )
+
+        entry = registry.get_user_service("nohttps", "myapp", "0")
+        assert entry is not None
+        assert entry.get("https") is False
+        assert entry.get("ssl_certificate_path") == ""
+        assert entry.get("ssl_certificate_key_path") == ""
 
 
 # ---------------------------------------------------------------------------

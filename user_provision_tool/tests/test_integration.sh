@@ -136,6 +136,7 @@ echo "PROVISION_DIR=$PROVISION_DIR"
 mkdir -p \
     "$PROVISION_DIR/generated" \
     "$PROVISION_DIR/templates" \
+    "$PROVISION_DIR/ssl" \
     "$PROVISION_DIR/user-data/testuser/app" \
     "$PROVISION_DIR/user-data/testuser/db" \
     "$PROVISION_DIR/user-data/fileuser/html" \
@@ -1199,6 +1200,188 @@ fi
 # Clean up envuser
 curl -sf -X DELETE "$API_URL/users/envuser/services/envtest/0" >/dev/null 2>&1 || true
 rm -rf "$ENV_TEST_DIR"
+
+# ---------------------------------------------------------------------------
+# Test 26: HTTPS registration with full cert paths
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 26: HTTPS registration with full cert paths ---"
+
+# Create fake SSL certificate files
+SSL_TEST_DIR="${PROVISION_DIR}/ssl"
+mkdir -p "$SSL_TEST_DIR"
+
+FULLCHAIN_SRC="${PROVISION_DIR}/templates/fullchain.pem"
+PRIVKEY_SRC="${PROVISION_DIR}/templates/privkey.pem"
+echo "FAKE FULLCHAIN CERT" > "$FULLCHAIN_SRC"
+echo "FAKE PRIVATE KEY"   > "$PRIVKEY_SRC"
+
+HTTPS_REG_BODY=$(cat <<EOF
+{
+  "user_name": "httpsuser",
+  "service_name": "myapp",
+  "compose_template_path": "${PROVISION_DIR}/templates/docker-compose.template.yml.j2",
+  "nginx_conf_template_path": "${PROVISION_DIR}/templates/myapp.template.nginx.conf.j2",
+  "label": "0",
+  "domain": "example.com",
+  "passwd": "s3cr3t",
+  "volumes": {
+    "app_data": "${PROVISION_DIR}/user-data/testuser/app",
+    "db_data":  "${PROVISION_DIR}/user-data/testuser/db"
+  },
+  "https": true,
+  "fullchain": "${FULLCHAIN_SRC}",
+  "privkey": "${PRIVKEY_SRC}"
+}
+EOF
+)
+https_resp=$(curl -sf -X POST "$API_URL/users?sync=true" \
+    -H "Content-Type: application/json" \
+    -d "$HTTPS_REG_BODY")
+https_status=$(echo "$https_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
+if [ "$https_status" = "registered" ]; then
+    pass "HTTPS full-path registration: httpsuser/myapp/0 registered"
+else
+    fail "HTTPS full-path registration failed: $https_resp"
+fi
+
+# Verify https + ssl paths in registry response
+https_https=$(echo "$https_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['entry'].get('https',''))" 2>/dev/null || echo "")
+https_cert=$(echo "$https_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['entry'].get('ssl_certificate_path',''))" 2>/dev/null || echo "")
+https_key=$(echo "$https_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['entry'].get('ssl_certificate_key_path',''))" 2>/dev/null || echo "")
+if [ "$https_https" = "True" ]; then
+    pass "Registry entry: https=True"
+else
+    fail "Registry entry: expected https=True, got: $https_https"
+fi
+
+EXPECTED_SSL_DIR="${PROVISION_DIR}/ssl/example.com"
+EXPECTED_FULLCHAIN="${EXPECTED_SSL_DIR}/fullchain.pem"
+EXPECTED_PRIVKEY="${EXPECTED_SSL_DIR}/privkey.pem"
+
+if echo "$https_cert" | grep -q "ssl/example.com/fullchain.pem"; then
+    pass "ssl_certificate_path points to ssl/example.com/fullchain.pem: $https_cert"
+else
+    fail "ssl_certificate_path unexpected: $https_cert"
+fi
+
+# Verify cert files were copied to the SSL directory
+if [ -f "$EXPECTED_FULLCHAIN" ]; then
+    pass "fullchain.pem copied to ${EXPECTED_FULLCHAIN}"
+    if grep -q "FAKE FULLCHAIN CERT" "$EXPECTED_FULLCHAIN"; then
+        pass "fullchain.pem has correct content"
+    else
+        fail "fullchain.pem has wrong content: $(cat "$EXPECTED_FULLCHAIN")"
+    fi
+else
+    fail "fullchain.pem not found at: $EXPECTED_FULLCHAIN"
+fi
+
+if [ -f "$EXPECTED_PRIVKEY" ]; then
+    pass "privkey.pem copied to ${EXPECTED_PRIVKEY}"
+else
+    fail "privkey.pem not found at: $EXPECTED_PRIVKEY"
+fi
+
+# Verify nginx conf was rendered with HTTPS blocks
+HTTPS_NGINX_CONF="${PROVISION_DIR}/generated/myapp.user-httpsuser.0.nginx.conf"
+if [ -f "$HTTPS_NGINX_CONF" ]; then
+    if grep -q "listen 443 ssl;" "$HTTPS_NGINX_CONF"; then
+        pass "Nginx conf has listen 443 ssl"
+    else
+        fail "Nginx conf missing listen 443 ssl"
+    fi
+    if grep -q "ssl_certificate\b" "$HTTPS_NGINX_CONF"; then
+        pass "Nginx conf has ssl_certificate directive"
+    else
+        fail "Nginx conf missing ssl_certificate"
+    fi
+    if grep -q "ssl_certificate_key\b" "$HTTPS_NGINX_CONF"; then
+        pass "Nginx conf has ssl_certificate_key directive"
+    else
+        fail "Nginx conf missing ssl_certificate_key"
+    fi
+    if grep -q "return 301 https://" "$HTTPS_NGINX_CONF"; then
+        pass "Nginx conf has HTTP→HTTPS redirect"
+    else
+        fail "Nginx conf missing HTTP→HTTPS redirect"
+    fi
+else
+    fail "HTTPS nginx conf not found at: $HTTPS_NGINX_CONF"
+fi
+
+# Clean up httpsuser
+curl -sf -X DELETE "$API_URL/users/httpsuser/services/myapp/0" >/dev/null 2>&1 || true
+rm -f "$FULLCHAIN_SRC" "$PRIVKEY_SRC"
+
+# ---------------------------------------------------------------------------
+# Test 27: HTTPS registration with bare filenames (pre-placed in SSL dir)
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 27: HTTPS registration with bare filenames ---"
+
+# Pre-place certs with custom names in the SSL directory
+CUSTOM_SSL_DIR="${PROVISION_DIR}/ssl/bare-domain.local"
+mkdir -p "$CUSTOM_SSL_DIR"
+echo "BARE FULLCHAIN" > "${CUSTOM_SSL_DIR}/my-cert.pem"
+echo "BARE PRIVKEY"   > "${CUSTOM_SSL_DIR}/my-key.pem"
+
+BAREHTTPS_REG_BODY=$(cat <<EOF
+{
+  "user_name": "barehttps",
+  "service_name": "myapp",
+  "compose_template_path": "${PROVISION_DIR}/templates/docker-compose.template.yml.j2",
+  "nginx_conf_template_path": "${PROVISION_DIR}/templates/myapp.template.nginx.conf.j2",
+  "label": "0",
+  "domain": "bare-domain.local",
+  "passwd": "",
+  "volumes": {
+    "app_data": "${PROVISION_DIR}/user-data/testuser/app",
+    "db_data":  "${PROVISION_DIR}/user-data/testuser/db"
+  },
+  "https": true,
+  "fullchain": "my-cert.pem",
+  "privkey": "my-key.pem"
+}
+EOF
+)
+barehttps_resp=$(curl -sf -X POST "$API_URL/users?sync=true" \
+    -H "Content-Type: application/json" \
+    -d "$BAREHTTPS_REG_BODY")
+barehttps_status=$(echo "$barehttps_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "")
+if [ "$barehttps_status" = "registered" ]; then
+    pass "HTTPS bare-filename registration: barehttps/myapp/0 registered"
+else
+    fail "HTTPS bare-filename registration failed: $barehttps_resp"
+fi
+
+# Verify ssl_certificate_path uses the bare filename directly
+barehttps_cert=$(echo "$barehttps_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['entry'].get('ssl_certificate_path',''))" 2>/dev/null || echo "")
+barehttps_key=$(echo "$barehttps_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['entry'].get('ssl_certificate_key_path',''))" 2>/dev/null || echo "")
+if echo "$barehttps_cert" | grep -q "my-cert.pem"; then
+    pass "Bare filename: ssl_certificate_path uses my-cert.pem"
+else
+    fail "Bare filename: ssl_certificate_path unexpected: $barehttps_cert"
+fi
+if echo "$barehttps_key" | grep -q "my-key.pem"; then
+    pass "Bare filename: ssl_certificate_key_path uses my-key.pem"
+else
+    fail "Bare filename: ssl_certificate_key_path unexpected: $barehttps_key"
+fi
+
+# Verify the cert files are used directly (no copying — same content at original location)
+if [ -f "${CUSTOM_SSL_DIR}/my-cert.pem" ]; then
+    if grep -q "BARE FULLCHAIN" "${CUSTOM_SSL_DIR}/my-cert.pem"; then
+        pass "Bare filename: original cert file intact"
+    else
+        fail "Bare filename: cert file modified unexpectedly"
+    fi
+else
+    fail "Bare filename: cert file missing after registration"
+fi
+
+# Clean up barehttps
+curl -sf -X DELETE "$API_URL/users/barehttps/services/myapp/0" >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
 # Results

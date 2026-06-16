@@ -1,12 +1,46 @@
 # nginx conf template for "myapp" service
 # Template variables:
-#   {{ hostname }}          -> e.g. myapp-alice-0.example.com
-#   {{ container_prefix }}  -> e.g. myapp-user_alice-0-
-#   {{ htpasswd_path }}     -> absolute path to the generated .htpasswd file
+#   {{ hostname }}                  -> e.g. myapp-alice-0.example.com
+#   {{ container_prefix }}          -> e.g. myapp-user_alice-0-
+#   {{ htpasswd_path }}             -> absolute path to the generated .htpasswd file
 #   {{ user_name }}
 #   {{ service_name }}
 #   {{ label }}
 #   {{ domain_name }}
+#   {{ https }}                     -> boolean, True when HTTPS is enabled
+#   {{ ssl_certificate_path }}      -> /provision/ssl/{{ domain_name }}/fullchain.pem
+#   {{ ssl_certificate_key_path }}  -> /provision/ssl/{{ domain_name }}/privkey.pem
+
+{% if https %}
+# --- HTTPS enabled: redirect HTTP → HTTPS, then serve on 443 ---
+
+server {
+    listen 80;
+    server_name {{ hostname }};
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name {{ hostname }};
+
+    ssl_certificate     {{ ssl_certificate_path }};
+    ssl_certificate_key {{ ssl_certificate_key_path }};
+
+    auth_basic "{{ service_name }} - {{ user_name }}";
+    auth_basic_user_file {{ htpasswd_path }};
+
+    location / {
+        proxy_pass         http://{{ container_prefix }}web:80;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+    }
+}
+
+{% else %}
+# --- HTTP only ---
 
 server {
     listen 80;
@@ -23,3 +57,5 @@ server {
         proxy_set_header   X-Forwarded-Proto $scheme;
     }
 }
+
+{% endif %}

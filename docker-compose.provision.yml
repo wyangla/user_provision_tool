@@ -17,6 +17,7 @@ services:
       - REGISTRY_FILE=${PROVISION_DIR}/generated/user_registry.yml
       - NGINX_CONTAINER=provision-nginx
       - DOCKER_OPS_LOG=${PROVISION_DIR}/generated/docker_ops.log
+      - SSL_DIR=${PROVISION_DIR}/ssl
     restart: unless-stopped
 
   provision-nginx:
@@ -24,6 +25,7 @@ services:
     container_name: provision-nginx
     ports:
       - "${NGINX_HTTP_PORT:-80}:80"
+      - "${NGINX_HTTPS_PORT:-443}:443"
     volumes:
       # Same-path bind-mount so htpasswd paths in generated confs resolve correctly
       - ${PROVISION_DIR}:${PROVISION_DIR}:ro

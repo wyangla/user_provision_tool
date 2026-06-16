@@ -3,12 +3,13 @@
 The test suite has four layers:
 
 ```
-Integration (bash)   tests/test_integration.sh     25 tests
+Integration (bash)   tests/test_integration.sh     27 tests
   └─ full Docker round-trip: build image → start API → register → rebuild → remove
     also covers -fc / -fn plain-file conversion via the API
     also covers passwd='' (no-auth) and default-passwd (auth enabled) paths
     also covers async task pool (GET /tasks, GET /tasks/{id}, DELETE /tasks/{id})
     also covers proxy build_args with MockProxy
+    also covers HTTPS registration (full paths + bare filenames)
 
 E2E (pytest)         tests/test_e2e.py              ~36 tests
   └─ exercise CLI scripts end-to-end against real files, no Docker
@@ -21,10 +22,12 @@ Proxy Support        tests/test_proxy_support.py    38 tests
 Async Task Pool      tests/test_task_manager.py     10 tests
   └─ submit, complete, fail, cancel, list_all, uniqueness
 
-Unit (pytest)        tests/test_unit.py             ~108 tests
+Unit (pytest)        tests/test_unit.py             ~114 tests
   └─ individual lib/ functions in isolation, all I/O mocked
     includes provisioner proxy support tests
     includes env_file render_compose rewrite + per-user copy tests
+    includes HTTPS: nginx rendering, converter SSL path replacement,
+      SSL block wrapping, provisioner cert copying + bare filenames
 ```
 
 ---
@@ -44,8 +47,9 @@ Notable patterns:
 - `docker_ops` tests mock `subprocess.Popen` to avoid real Docker calls (was `subprocess.run` prior to real-time-output refactoring).
 - `template_engine` tests render against fixture templates in `tests/fixtures/`.
 - `TestComposeConverter` covers container_name rewriting, volume extraction, network substitution, profile filtering.
-- `TestNginxConverter` covers server_name, auth_basic, proxy_pass, and htpasswd_path substitutions.
+- `TestNginxConverter` covers server_name, auth_basic, proxy_pass, htpasswd_path substitutions, and SSL certificate path conversion with `{% if https %}` block wrapping.
 - `TestProvisionerProxySupport` covers `build_args` storage in registry and rebuild fallback.
+- `TestProvisionerEnvFile` covers HTTPS: full-path cert copying, bare-filename resolution, missing-cert error handling, and registry field storage.
 
 ---
 
