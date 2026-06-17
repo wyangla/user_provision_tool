@@ -101,17 +101,6 @@ def convert_nginx(
         text,
     )
 
-    # If no auth_basic block exists at all, inject one before the first proxy_pass
-    if not re.search(r'[ \t]*auth_basic\b', text):
-        def _inject_auth(m: re.Match) -> str:
-            indent = re.match(r'^([ \t]*)', m.group(0)).group(1)
-            auth_lines = (
-                indent + 'auth_basic "{{ service_name }} - {{ user_name }}";\n' +
-                indent + 'auth_basic_user_file {{ htpasswd_path }};\n'
-            )
-            return auth_lines + m.group(0)
-        text = re.sub(r'[ \t]*proxy_pass[ \t]+\S+;', _inject_auth, text, count=1)
-
     # --- Build set of compose service names for fast lookup ---
     compose_names: set[str] = set()
     if compose_service_names:
@@ -224,6 +213,36 @@ def convert_nginx(
             _repl_proxy,
             text,
         )
+
+    # --- Inject auth_basic into every server block that lacks it ---
+    # Must run AFTER HTTPS block generation so that:
+    #  - auto-generated HTTPS blocks (cloned from HTTP) also receive auth_basic
+    #  - existing HTTPS blocks (wrapped in {% if https %}) also receive auth_basic
+    if not re.search(r'[ \t]*auth_basic\b', text):
+        def _inject_auth(m: re.Match) -> str:
+            indent = re.match(r'^([ \t]*)', m.group(0)).group(1)
+            auth_lines = (
+                indent + 'auth_basic "{{ service_name }} - {{ user_name }}";\n' +
+                indent + 'auth_basic_user_file {{ htpasswd_path }};\n'
+            )
+            return auth_lines + m.group(0)
+
+        parts = _split_server_blocks(text)
+        out_blocks: list[str] = []
+        for p in parts:
+            if p["is_server"]:
+                block = p["text"]
+                # Inject auth_basic before the first proxy_pass in this server block
+                block = re.sub(
+                    r'([ \t]*)proxy_pass[ \t]+[^;]+;',
+                    _inject_auth,
+                    block,
+                    count=1,
+                )
+                out_blocks.append(block)
+            else:
+                out_blocks.append(p["text"])
+        text = ''.join(out_blocks)
 
     return text
 
