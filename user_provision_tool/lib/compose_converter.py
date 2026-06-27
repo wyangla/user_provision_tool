@@ -43,6 +43,10 @@ Transformations applied
 8. Strip `profiles:` from every service.
    Profile selection is a deployment-level concern; every rendered user compose
    must unconditionally start all its services via `docker compose up`.
+
+9. Passthrough system sockets — `/var/run/docker.sock` and `/run/docker.sock`
+   are NEVER converted to per-user volume variables.  They remain as literal
+   host paths so containers can communicate with the host Docker daemon.
 """
 
 from __future__ import annotations
@@ -99,6 +103,20 @@ def _unique_key(candidate: str, used: set[str]) -> str:
 
 # ─── Volume helpers ───────────────────────────────────────────────────────────
 
+# Paths that must NEVER be converted to per-user template variables.
+# These are host system sockets / special files that must remain
+# as literal host paths in both the template and rendered compose files.
+_PASSTHROUGH_PATHS: set[str] = {
+    "/var/run/docker.sock",
+    "/run/docker.sock",
+}
+
+
+def _is_passthrough(src: str) -> bool:
+    """Return True if *src* is a host system path that must stay literal."""
+    return src in _PASSTHROUGH_PATHS
+
+
 def _is_bind_source(src: str) -> bool:
     """Return True if *src* is a host filesystem path (bind mount)."""
     return (
@@ -112,14 +130,16 @@ def _is_bind_source(src: str) -> bool:
 
 
 def _collect_bind_mounts(services: dict) -> list[str]:
-    """Return ordered, de-duplicated bind-mount sources across all services."""
+    """Return ordered, de-duplicated bind-mount sources across all services,
+    excluding well-known system paths (e.g. Docker socket) that must remain
+    literal."""
     seen: list[str] = []
     for svc in services.values():
         if not isinstance(svc, dict):
             continue
         for entry in svc.get("volumes", []):
             src = _volume_source(entry)
-            if src and _is_bind_source(src) and src not in seen:
+            if src and _is_bind_source(src) and not _is_passthrough(src) and src not in seen:
                 seen.append(src)
     return seen
 

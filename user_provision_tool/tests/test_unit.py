@@ -919,6 +919,93 @@ class TestComposeConverter:
         names = get_compose_service_names(compose)
         assert names == []
 
+    # ── docker.sock passthrough ──────────────────────────────────────────
+
+    def test_docker_sock_not_converted_to_volume_key(self):
+        """Verify /var/run/docker.sock is NOT converted to a template variable.
+
+        The Docker socket must remain as a literal host path so containers can
+        communicate with the host Docker daemon.  Converting it to a per-user
+        volume key would break all docker-cli containers.
+        """
+        from lib.compose_converter import convert
+        data = {
+            "services": {
+                "supervisor": {
+                    "image": "docker:cli",
+                    "volumes": ["/var/run/docker.sock:/var/run/docker.sock"],
+                },
+            },
+        }
+        _, src_to_key, _ = convert(data)
+        assert "/var/run/docker.sock" not in src_to_key, (
+            "docker.sock must not appear in src_to_key — it is a passthrough path"
+        )
+        assert "docker_sock" not in src_to_key.values(), (
+            "docker_sock must not be a volume key"
+        )
+
+    def test_docker_sock_literal_in_generated_template(self, tmp_path):
+        """Verify docker.sock appears as a literal path in the generated .j2 template."""
+        from lib.compose_converter import compose_file_to_template
+        src = str(tmp_path / "dc.yml")
+        dst = str(tmp_path / "dc.yml.j2")
+        Path(src).write_text("""\
+services:
+  supervisor:
+    image: docker:cli
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+""")
+        src_to_key = compose_file_to_template(src, dst)
+        content = Path(dst).read_text()
+        # docker.sock must remain as a literal path in the template
+        assert "/var/run/docker.sock:/var/run/docker.sock" in content, (
+            "docker.sock must stay as literal host path in template"
+        )
+        # It must NOT be converted to a Jinja2 volumes reference
+        assert "{{ volumes['" not in content, (
+            "docker.sock must not become a Jinja2 volume variable"
+        )
+        assert src_to_key == {}, (
+            "No bind-mounts should be converted for docker.sock-only compose files"
+        )
+
+    def test_run_docker_sock_also_passthrough(self):
+        """/run/docker.sock (alternate path) is also a passthrough."""
+        from lib.compose_converter import convert
+        data = {
+            "services": {
+                "supervisor": {
+                    "image": "docker:cli",
+                    "volumes": ["/run/docker.sock:/var/run/docker.sock"],
+                },
+            },
+        }
+        _, src_to_key, _ = convert(data)
+        assert "/run/docker.sock" not in src_to_key
+
+    def test_passthrough_paths_surrounded_by_normal_bind_mounts(self):
+        """Normal bind mounts are still converted even when docker.sock is present."""
+        from lib.compose_converter import convert
+        data = {
+            "services": {
+                "web": {
+                    "image": "nginx",
+                    "volumes": ["/data/html:/usr/share/nginx/html:ro"],
+                },
+                "supervisor": {
+                    "image": "docker:cli",
+                    "volumes": ["/var/run/docker.sock:/var/run/docker.sock"],
+                },
+            },
+        }
+        _, src_to_key, _ = convert(data)
+        # Normal bind mount IS converted
+        assert "/data/html" in src_to_key
+        # docker.sock is NOT converted
+        assert "/var/run/docker.sock" not in src_to_key
+
 
 # ---------------------------------------------------------------------------
 # nginx_converter

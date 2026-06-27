@@ -200,11 +200,16 @@ The converters apply these substitutions:
 | Directive (compose) | Transformation |
 |---|---|
 | `container_name` | `→ {{ container_prefix }}{suffix}` |
-| bind-mount source paths | `→ {{ volumes['key'] }}` |
+| bind-mount source paths | `→ {{ volumes['key'] }}` (except Docker socket — see below) |
 | network names | `→ {{ network_name }}` |
 | named volume keys | `→ {{ volumes['key'] }}` |
 | `name:` and `ports:` | stripped |
 | `profiles:` | stripped from kept services; services with any non-empty profile string are excluded entirely |
+
+> **Docker socket passthrough**: Bind mounts to `/var/run/docker.sock` and `/run/docker.sock`
+> are **never** converted to template variables.  These are host system sockets that must
+> remain as literal paths so containers can communicate with the host Docker daemon.
+> They are left unchanged in both the `.j2` template and the rendered compose file.
 
 | Directive (nginx) | Transformation |
 |---|---|

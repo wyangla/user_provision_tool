@@ -105,7 +105,7 @@ user_provision_tool/
 | `auth.py` | `getpass` prompt; bcrypt hash via `passlib.hash.bcrypt`; write `.htpasswd` file |
 | `docker_ops.py` | `compose_up`, `compose_down`, `compose_build`, `docker_ps`, `network_connect`, `network_disconnect`, `nginx_reload` wrappers; real-time stdout/stderr via `subprocess.Popen` + threading; supports `--build-arg` for proxy; writes to `DOCKER_OPS_LOG` file when env var is set |
 | `provisioner.py` | Shared workflow for register/remove/rebuild; supports `build_args` (proxy) passed through to docker_ops; both `api.py` and `cli/` delegate here |
-| `compose_converter.py` | Parse a plain `docker-compose.yml` and emit a Jinja2 `.yml.j2` template; services with named profiles are excluded; `profiles:` key is stripped from kept services |
+| `compose_converter.py` | Parse a plain `docker-compose.yml` and emit a Jinja2 `.yml.j2` template; services with named profiles are excluded; `profiles:` key is stripped from kept services; Docker socket paths (`/var/run/docker.sock`, `/run/docker.sock`) are preserved as literal host paths — never converted to per-user volume variables |
 | `nginx_converter.py` | Apply regex substitutions to a plain nginx conf and emit a `.j2` template; injects `auth_basic` + `auth_basic_user_file` directives before the first `proxy_pass` if none are already present; detects when a `proxy_pass` host matches a compose service name and rewrites it to `{{ container_prefix }}<name>` |
 | `task_manager.py` | In-memory async task pool (`ThreadPoolExecutor`); submit → status → cancel lifecycle; powers `GET /tasks`, `GET /tasks/{id}`, `DELETE /tasks/{id}` endpoints |
 
