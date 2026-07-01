@@ -23,6 +23,8 @@ from typing import Any
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, Undefined
 
+from .yaml_utils import IndentedDumper
+
 
 def _make_env(template_path: str) -> tuple[Environment, str]:
     tpl = Path(template_path).resolve()
@@ -162,7 +164,9 @@ def render_compose(
 
         # Replace env_file: .env references in the rendered compose so
         # containers load env vars from the correct per-user file.
-        rendered = _rewrite_env_file_refs(rendered, per_user_env_name)
+        # Walk the parsed dict to replace .env before dumping — avoids
+        # indentation-dependent regex matching on flattened YAML text.
+        rendered = _rewrite_env_file_in_dict(rendered, per_user_env_name)
 
     with open(output_path, "w") as f:
         f.write(rendered)
@@ -170,8 +174,51 @@ def render_compose(
     return copied_env
 
 
-def _rewrite_env_file_refs(yaml_text: str, per_user_env_name: str) -> str:
+def _rewrite_env_file_in_dict(yaml_text: str, per_user_env_name: str) -> str:
     """Replace ``.env`` references in ``env_file:`` directives with *per_user_env_name*.
+
+    Parses the YAML text into a dict, walks the service definitions to find
+    and replace ``env_file`` values pointing to ``.env``, then re-serialises.
+    This is immune to indentation variations that break regex-based approaches.
+
+    Handles both forms:
+      - String:  ``env_file: .env``
+      - List:    ``env_file:\\n  - .env``
+    """
+    try:
+        data = yaml.safe_load(yaml_text)
+    except yaml.YAMLError:
+        # Fall back to the legacy regex approach if YAML is unparseable
+        return _rewrite_env_file_refs_legacy(yaml_text, per_user_env_name)
+
+    if not isinstance(data, dict):
+        return yaml_text
+
+    services = data.get("services")
+    if isinstance(services, dict):
+        for svc in services.values():
+            if not isinstance(svc, dict):
+                continue
+            env_val = svc.get("env_file")
+            if env_val == ".env":
+                svc["env_file"] = per_user_env_name
+            elif isinstance(env_val, list):
+                svc["env_file"] = [
+                    per_user_env_name if v == ".env" else v for v in env_val
+                ]
+
+    return yaml.dump(
+        data,
+        Dumper=IndentedDumper,
+        default_flow_style=False,
+        allow_unicode=True,
+        sort_keys=False,
+        indent=2,
+    )
+
+
+def _rewrite_env_file_refs_legacy(yaml_text: str, per_user_env_name: str) -> str:
+    """Legacy regex-based fallback for unparseable YAML.
 
     Handles both forms:
       - String:  ``env_file: .env``
@@ -194,7 +241,7 @@ def _rewrite_env_file_refs(yaml_text: str, per_user_env_name: str) -> str:
         if in_env_file:
             # List item under env_file:
             m2 = re.match(r"^(\s+)-\s+(.*)$", line)
-            if m2 and len(m2.group(1)) > env_file_indent:
+            if m2 and len(m2.group(1)) >= env_file_indent:
                 if m2.group(2) == ".env":
                     line = f"{m2.group(1)}- {per_user_env_name}"
                 result.append(line)

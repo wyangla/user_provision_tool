@@ -57,6 +57,8 @@ from typing import Any
 
 import yaml
 
+from .yaml_utils import IndentedDumper
+
 
 # ─── Token registry ───────────────────────────────────────────────────────────
 # We transform the parsed data dict using opaque tokens, then yaml.dump it,
@@ -224,7 +226,7 @@ def _represent_none_as_empty(dumper: yaml.Dumper, _data: None) -> yaml.Node:
 
 
 def _dump_yaml(data: Any) -> str:
-    class _Dumper(yaml.Dumper):
+    class _Dumper(IndentedDumper):
         pass
     _Dumper.add_representer(type(None), _represent_none_as_empty)
     return yaml.dump(
@@ -233,6 +235,7 @@ def _dump_yaml(data: Any) -> str:
         default_flow_style=False,
         allow_unicode=True,
         sort_keys=False,
+        indent=2,
     )
 
 

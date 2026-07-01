@@ -13,7 +13,7 @@ Integration (bash)   tests/test_integration.sh     29 tests
     also covers hyphenated usernames
     also covers auto-HTTPS generation from plain HTTP nginx conf
 
-E2E (pytest)         tests/test_e2e.py              ~36 tests
+E2E (pytest)         tests/test_e2e.py              40 tests
   └─ exercise CLI scripts end-to-end against real files, no Docker
     includes proxy --build-arg support tests
     includes env_file_path with per-user copy + env_file: .env rewrite
@@ -24,7 +24,7 @@ Proxy Support        tests/test_proxy_support.py    38 tests
 Async Task Pool      tests/test_task_manager.py     10 tests
   └─ submit, complete, fail, cancel, list_all, uniqueness
 
-Unit (pytest)        tests/test_unit.py             ~114 tests
+Unit (pytest)        tests/test_unit.py             132 tests
   └─ individual lib/ functions in isolation, all I/O mocked
     includes provisioner proxy support tests
     includes env_file render_compose rewrite + per-user copy tests
@@ -154,7 +154,7 @@ bash tests/test_integration.sh
 ### Run all tests
 
 ```bash
-# All pytest-based tests (181 tests, no Docker needed)
+# All pytest-based tests (220 tests, no Docker needed)
 uv run pytest tests/test_unit.py tests/test_e2e.py tests/test_proxy_support.py tests/test_task_manager.py -v
 
 # Full integration (29 tests, requires Docker)
@@ -176,7 +176,7 @@ uv sync
 python -m pytest tests/test_unit.py tests/test_e2e.py -v
 ```
 
-Expected: **216 passed** (128 unit + 40 e2e + 38 proxy + 10 task_manager).
+Expected: **220 passed** (132 unit + 40 e2e + 38 proxy + 10 task_manager).
 
 ---
 

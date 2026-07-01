@@ -64,7 +64,8 @@ user_provision_tool/
 │   ├── provisioner.py             # Shared registration / removal / rebuild workflow
 │   ├── compose_converter.py       # Plain docker-compose.yml → Jinja2 template
 │   ├── nginx_converter.py         # Plain nginx conf → Jinja2 template
-│   └── task_manager.py            # Async task pool (ThreadPoolExecutor) for background Docker ops
+│   ├── task_manager.py            # Async task pool (ThreadPoolExecutor) for background Docker ops
+│   └── yaml_utils.py              # Shared IndentedDumper for consistent YAML output
 │
 ├── source_projects/               # SOURCE_PROJECTS_DIR = $PROVISION_DIR/source_projects
 │   │                              # Bare project_root name "myapp" → source_projects/myapp/
@@ -108,6 +109,7 @@ user_provision_tool/
 | `compose_converter.py` | Parse a plain `docker-compose.yml` and emit a Jinja2 `.yml.j2` template; services with named profiles are excluded; `profiles:` key is stripped from kept services; Docker socket paths (`/var/run/docker.sock`, `/run/docker.sock`) are preserved as literal host paths — never converted to per-user volume variables |
 | `nginx_converter.py` | Apply regex substitutions to a plain nginx conf and emit a `.j2` template; injects `auth_basic` + `auth_basic_user_file` directives before the first `proxy_pass` if none are already present; detects when a `proxy_pass` host matches a compose service name and rewrites it to `{{ container_prefix }}<name>` |
 | `task_manager.py` | In-memory async task pool (`ThreadPoolExecutor`); submit → status → cancel lifecycle; powers `GET /tasks`, `GET /tasks/{id}`, `DELETE /tasks/{id}` endpoints |
+| `yaml_utils.py` | Shared `IndentedDumper` class (extends `yaml.Dumper`) that always indents sequence items under their parent key; used by `compose_converter` and `template_engine` for consistent YAML serialisation |
 
 ---
 
